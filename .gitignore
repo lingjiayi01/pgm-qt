@@ -1,0 +1,13 @@
+build/
+cmake-build-*/
+*.pro.user
+*.qml.user
+*.exe
+*.dll
+*.o
+*.obj
+*.moc
+*.rcc
+*.ui_*.h
+*.log
+*.tmp
