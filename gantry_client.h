@@ -23,6 +23,8 @@ public:
     void connectToTcsService(const QString &host = "127.0.0.1", quint16 port = 5510);
     void disconnect();
     bool isConnected() const;
+    bool isModbusMode() const { return m_mode == ConnMode::Modbus; }
+    bool isTcsMode() const { return m_mode == ConnMode::Tcs; }
     QString currentHost() const { return m_host; }
     quint16 currentPort() const { return m_port; }
 
@@ -37,6 +39,8 @@ public:
     void moveToPosition(double angleDeg, double speed, double timeoutSec = 300.0);
     void stopManualMotion();
     void closeAllBrakes();
+    void openAllBrakes();
+    void recoverEstop2();
 
     // 查询
     void requestSnapshot();
@@ -57,6 +61,7 @@ signals:
 
 private:
     void onTcsReadyRead();
+    void applyTcsResponse(const TcsResponse &resp);
     void emitLog(const QString &msg);
     void buildStatusFromPartial();
 

@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include <algorithm>
 #include <cmath>
 
 // ============================================================================
@@ -59,8 +60,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(&m_client, &GantryClient::connected, this, [this]() {
         m_connStatusLamp->setStyleSheet(
             "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText("已连接");
+        m_connStatusLabel->setText(m_client.isTcsMode() ? "已连接 (TCS)" : "已连接 (Modbus)");
         m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
+        updateControlsForConnectionMode();
         onLogMessage("=== 已连接 ===");
     });
     connect(&m_client, &GantryClient::disconnected, this, [this]() {
@@ -70,6 +72,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         m_connStatusLabel->setStyleSheet("color:#d04040; font-weight:bold;");
         m_pollTimer.stop();
         resetAllLeds();
+        updateControlsForConnectionMode();
         onLogMessage("=== 已断开 ===");
     });
     connect(&m_client, &GantryClient::statusUpdated,
@@ -154,7 +157,19 @@ QWidget *MainWindow::buildConnectionPanel() {
     m_connModeCombo = new QComboBox;
     m_connModeCombo->addItem("Modbus PLC", 0);
     m_connModeCombo->addItem("TCS JSON", 1);
+    connect(m_connModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onConnModeChanged);
     l->addWidget(m_connModeCombo);
+
+    m_btnTcsSnapshot = new QPushButton("快照");
+    m_btnTcsSnapshot->setToolTip("TCS 模式: 发送 snapshot 刷新状态");
+    connect(m_btnTcsSnapshot, &QPushButton::clicked, this, &MainWindow::requestTcsSnapshot);
+    l->addWidget(m_btnTcsSnapshot);
+
+    m_btnTcsPing = new QPushButton("Ping");
+    m_btnTcsPing->setToolTip("TCS 模式: 连通性检测");
+    connect(m_btnTcsPing, &QPushButton::clicked, this, &MainWindow::sendTcsPing);
+    l->addWidget(m_btnTcsPing);
 
     auto *btnC = new QPushButton("连接");
     btnC->setObjectName("btnConnect");
@@ -249,13 +264,15 @@ QWidget *MainWindow::buildTopPanel() {
 
     makeRow("自动模式",    m_ledAuto);
     makeRow("手动模式",    m_ledManual);
+    makeRow("速度模式",    m_ledSpeed);
     makeRow("寻零运行",    m_ledHoming);
     makeRow("位置运行",    m_ledPosition);
     makeRow("电机运行",    m_ledMotor);
     makeRow("寻零完成",    m_ledHomingDone);
     makeRow("急停触发",    m_ledEstop);
     makeRow("安全继电器",  m_ledSafety);
-    makeRow("气压异常",    m_ledAir);
+    makeRow("气压正常",    m_ledAir);
+    makeRow("制动器关闭",  m_ledBrakes);
     makeRow("运动禁止",    m_ledMotionInhibit);
     makeRow("可出束",      m_ledBeamPermit);
 
@@ -276,15 +293,16 @@ QWidget *MainWindow::buildTopPanel() {
     };
     ap(0,  "伺服角度",    m_labelServoAngle);
     ap(1,  "ABS_01角度",  m_labelAbs01Angle);
-    ap(2,  "当前速度",    m_labelCurrentSpeed);
-    ap(3,  "位置给定",    m_labelPositionSetpoint);
-    ap(4,  "速度给定",    m_labelSpeedSetpoint);
-    ap(5,  "伺服1扭矩",   m_labelServo1Torque);
-    ap(6,  "伺服2扭矩",   m_labelServo2Torque);
-    ap(7,  "串动1",       m_labelSlip1);
-    ap(8,  "串动2",       m_labelSlip2);
-    ap(9,  "剪切力",      m_labelShearForce);
-    ap(10, "急停过冲",    m_labelEstopOvershoot);
+    ap(2,  "ABS_02角度",  m_labelAbs02Angle);
+    ap(3,  "当前速度",    m_labelCurrentSpeed);
+    ap(4,  "位置给定",    m_labelPositionSetpoint);
+    ap(5,  "速度给定",    m_labelSpeedSetpoint);
+    ap(6,  "伺服1扭矩",   m_labelServo1Torque);
+    ap(7,  "伺服2扭矩",   m_labelServo2Torque);
+    ap(8,  "串动1",       m_labelSlip1);
+    ap(9,  "串动2",       m_labelSlip2);
+    ap(10, "剪切力",      m_labelShearForce);
+    ap(11, "急停过冲",    m_labelEstopOvershoot);
     hbox->addWidget(pgb);
 
     return w;
@@ -296,23 +314,25 @@ QWidget *MainWindow::buildTopPanel() {
 
 QWidget *MainWindow::buildControlPanel() {
     auto *gb = new QGroupBox("运动控制");
-    auto *g = new QGridLayout(gb);
+    auto *outer = new QVBoxLayout(gb);
+    m_modbusOnlyPanel = new QWidget;
+    auto *g = new QGridLayout(m_modbusOnlyPanel);
     g->setSpacing(5);
 
     // 模式
-    g->addWidget(new QLabel("<b>模式</b>"), 0, 0, 1, 2);
-    auto *btnAuto = new QPushButton("自动模式");
-    connect(btnAuto, &QPushButton::clicked, this, &MainWindow::setAutoMode);
-    g->addWidget(btnAuto, 1, 0);
-    auto *btnManual = new QPushButton("手动模式");
-    connect(btnManual, &QPushButton::clicked, this, &MainWindow::setManualMode);
-    g->addWidget(btnManual, 1, 1);
-    auto *btnHome = new QPushButton("寻零");
-    connect(btnHome, &QPushButton::clicked, this, &MainWindow::startHoming);
-    g->addWidget(btnHome, 2, 0);
-    auto *btnRst = new QPushButton("复位故障");
-    connect(btnRst, &QPushButton::clicked, this, &MainWindow::resetFault);
-    g->addWidget(btnRst, 2, 1);
+    g->addWidget(new QLabel("<b>模式 (Modbus)</b>"), 0, 0, 1, 2);
+    m_btnAuto = new QPushButton("自动模式");
+    connect(m_btnAuto, &QPushButton::clicked, this, &MainWindow::setAutoMode);
+    g->addWidget(m_btnAuto, 1, 0);
+    m_btnManual = new QPushButton("手动模式");
+    connect(m_btnManual, &QPushButton::clicked, this, &MainWindow::setManualMode);
+    g->addWidget(m_btnManual, 1, 1);
+    m_btnHome = new QPushButton("寻零");
+    connect(m_btnHome, &QPushButton::clicked, this, &MainWindow::startHoming);
+    g->addWidget(m_btnHome, 2, 0);
+    m_btnReset = new QPushButton("复位故障");
+    connect(m_btnReset, &QPushButton::clicked, this, &MainWindow::resetFault);
+    g->addWidget(m_btnReset, 2, 1);
 
     // 点动
     g->addWidget(new QLabel("<b>点动</b>"), 3, 0, 1, 2);
@@ -339,37 +359,61 @@ QWidget *MainWindow::buildControlPanel() {
     auto *btnStop = new QPushButton("■ 停止");
     connect(btnStop, &QPushButton::clicked, this, &MainWindow::stopManual);
     g->addWidget(btnStop, 6, 2);
+    outer->addWidget(m_modbusOnlyPanel);
 
-    // 定位
-    g->addWidget(new QLabel("<b>定位</b>"), 7, 0, 1, 2);
-    g->addWidget(new QLabel("目标角度:"), 8, 0);
+    auto *g2 = new QGridLayout;
+    g2->setSpacing(5);
+    int row = 0;
+
+    // 定位（Modbus / TCS 均可用）
+    g2->addWidget(new QLabel("<b>定位</b>"), row, 0, 1, 2);
+    row++;
+    g2->addWidget(new QLabel("目标角度:"), row, 0);
     m_targetAngleSpin = new QDoubleSpinBox;
     m_targetAngleSpin->setRange(-185.0, 185.0); m_targetAngleSpin->setValue(0.0);
     m_targetAngleSpin->setSuffix(" °"); m_targetAngleSpin->setDecimals(2);
-    g->addWidget(m_targetAngleSpin, 8, 1);
+    g2->addWidget(m_targetAngleSpin, row, 1);
+    row++;
 
-    g->addWidget(new QLabel("速度:"), 9, 0);
+    g2->addWidget(new QLabel("速度:"), row, 0);
     m_targetSpeedSpin = new QDoubleSpinBox;
     m_targetSpeedSpin->setRange(0.1, 20.0); m_targetSpeedSpin->setValue(3.0);
     m_targetSpeedSpin->setSuffix(" °/s"); m_targetSpeedSpin->setDecimals(1);
-    g->addWidget(m_targetSpeedSpin, 9, 1);
+    g2->addWidget(m_targetSpeedSpin, row, 1);
+    row++;
 
     auto *btnMove = new QPushButton("执行定位 →");
     btnMove->setStyleSheet(
         "background-color:#203050; border-color:#4060a0; color:#80b0ff;");
     connect(btnMove, &QPushButton::clicked, this, &MainWindow::moveToPosition);
-    g->addWidget(btnMove, 10, 0, 1, 2);
+    g2->addWidget(btnMove, row, 0, 1, 2);
+    row++;
 
-    // 安全操作
-    g->addWidget(new QLabel("<b>安全操作</b>"), 11, 0, 1, 2);
-    auto *btnEsp = new QPushButton("⚠ 紧急停止");
-    btnEsp->setObjectName("btnEstop");
-    connect(btnEsp, &QPushButton::clicked, this, &MainWindow::emergencyStop);
-    g->addWidget(btnEsp, 12, 0, 1, 2);
-    auto *btnBrk = new QPushButton("关闭全部制动器");
-    connect(btnBrk, &QPushButton::clicked, this, &MainWindow::closeBrakes);
-    g->addWidget(btnBrk, 13, 0, 1, 2);
+    g2->addWidget(new QLabel("<b>安全 (Modbus)</b>"), row, 0, 1, 2);
+    row++;
+    m_btnEstop = new QPushButton("⚠ 紧急停止");
+    m_btnEstop->setObjectName("btnEstop");
+    connect(m_btnEstop, &QPushButton::clicked, this, &MainWindow::emergencyStop);
+    g2->addWidget(m_btnEstop, row, 0, 1, 2);
+    row++;
 
+    m_btnBrakesClose = new QPushButton("关闭全部制动器");
+    connect(m_btnBrakesClose, &QPushButton::clicked, this, &MainWindow::closeBrakes);
+    g2->addWidget(m_btnBrakesClose, row, 0, 1, 2);
+    row++;
+
+    m_btnBrakesOpen = new QPushButton("打开全部制动器");
+    connect(m_btnBrakesOpen, &QPushButton::clicked, this, &MainWindow::openBrakes);
+    g2->addWidget(m_btnBrakesOpen, row, 0, 1, 2);
+    row++;
+
+    m_btnEstop2Recover = new QPushButton("急停2恢复");
+    m_btnEstop2Recover->setToolTip("松开急停2后发送故障复位脉冲 (workflow estop2-recover)");
+    connect(m_btnEstop2Recover, &QPushButton::clicked, this, &MainWindow::recoverEstop2);
+    g2->addWidget(m_btnEstop2Recover, row, 0, 1, 2);
+
+    outer->addLayout(g2);
+    updateControlsForConnectionMode();
     return gb;
 }
 
@@ -560,6 +604,7 @@ void MainWindow::onStatusUpdated(const GantryStatus &s) {
 void MainWindow::updateStatusLeds(const GantryStatus &s) {
     setLedColor(m_ledAuto,          s.autoModeActive);
     setLedColor(m_ledManual,        s.manualModeActive);
+    setLedColor(m_ledSpeed,         s.speedModeRunning, true);
     setLedColor(m_ledHoming,        s.homingRunning,    true);
     setLedColor(m_ledPosition,      s.positionModeRunning, true);
     setLedColor(m_ledMotor,         s.motorRunning,     true);
@@ -569,7 +614,10 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
     setLedColor(m_ledSafety,        !s.safetyRelayNotReady);
     bool airOk = s.air1PressureOk && s.air2PressureOk && !s.air1Low && !s.air2Low;
     setLedColor(m_ledAir,           airOk);
-    setLedColor(m_ledMotionInhibit, !s.motionInhibit());
+    bool brakesClosed = s.brakesOpen.empty()
+        || std::none_of(s.brakesOpen.begin(), s.brakesOpen.end(), [](bool o) { return o; });
+    setLedColor(m_ledBrakes,        brakesClosed);
+    setLedColor(m_ledMotionInhibit, !s.motionInhibitEffective());
     auto [bp, bpr] = s.beamPermit();
     setLedColor(m_ledBeamPermit,    bp);
     m_ledBeamPermit.text->setText(bp ? "可出束" : QString("可出束(%1)").arg(bpr));
@@ -578,6 +626,7 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
 void MainWindow::resetAllLeds() {
     setLedColor(m_ledAuto,          false);
     setLedColor(m_ledManual,        false);
+    setLedColor(m_ledSpeed,         false);
     setLedColor(m_ledHoming,        false);
     setLedColor(m_ledPosition,      false);
     setLedColor(m_ledMotor,         false);
@@ -585,6 +634,7 @@ void MainWindow::resetAllLeds() {
     setLedColor(m_ledEstop,         false);
     setLedColor(m_ledSafety,        false);
     setLedColor(m_ledAir,           false);
+    setLedColor(m_ledBrakes,        false);
     setLedColor(m_ledMotionInhibit, false);
     setLedColor(m_ledBeamPermit,    false);
     m_ledBeamPermit.text->setText("可出束");
@@ -603,6 +653,7 @@ void MainWindow::updateParameterDisplay(const GantryStatus &s) {
     auto fd = [](auto v) { return v.has_value() ? QString::number(*v, 'f', 3) + "°" : "—"; };
     m_labelServoAngle->setText(    fd(s.servoAngleDeg));
     m_labelAbs01Angle->setText(    fd(s.abs01AngleDeg));
+    m_labelAbs02Angle->setText(    fd(s.abs02AngleDeg));
     m_labelCurrentSpeed->setText(  f(s.servoCurrentSpeed, 2));
     m_labelPositionSetpoint->setText(fd(s.positionSetpoint));
     m_labelSpeedSetpoint->setText( f(s.speedSetpoint, 2));
@@ -637,17 +688,58 @@ void MainWindow::updateChart(double angle) {
 // ============================================================================
 
 void MainWindow::onCommandResponse(const TcsResponse &r) {
+    if (!r.ok && !r.error.isEmpty())
+        onLogMessage(QString("TCS 错误 [%1]: %2").arg(r.cmd, r.error));
     if (r.cmd == "ping")
         onLogMessage(r.pong ? "Ping: pong=true" : "Ping 错误: " + r.error);
     else if (r.cmd == "snapshot")
-        onLogMessage(QString("快照: beam_permit=%1").arg(r.beamPermit ? "是" : "否"));
+        onLogMessage(QString("快照: ok=%1 beam_permit=%2 %3")
+            .arg(r.ok).arg(r.beamPermit ? "是" : "否").arg(r.beamPermitReason));
     else if (r.cmd == "move")
-        onLogMessage(QString("运动: %1 | %2").arg(r.motionComplete ? "完成" : "失败", r.motionDetail));
+        onLogMessage(QString("运动: %1 | %2 | target=%3°")
+            .arg(r.motionComplete ? "完成" : "进行中/失败", r.motionDetail)
+            .arg(r.targetDeg, 0, 'f', 2));
 }
 
 void MainWindow::onLogMessage(const QString &msg) { appendLogRow(msg); }
 
 void MainWindow::onConnectionError(const QString &err) { onLogMessage("通信错误: " + err); }
+
+void MainWindow::onConnModeChanged(int index) {
+    if (index == 0) {
+        if (m_hostEdit->text() == "127.0.0.1") m_hostEdit->setText("192.168.10.1");
+        if (m_portEdit->text() == "5510") m_portEdit->setText("510");
+    } else {
+        if (m_hostEdit->text() == "192.168.10.1") m_hostEdit->setText("127.0.0.1");
+        if (m_portEdit->text() == "510") m_portEdit->setText("5510");
+    }
+    updateControlsForConnectionMode();
+}
+
+void MainWindow::updateControlsForConnectionMode() {
+    const bool tcs = m_connModeCombo && m_connModeCombo->currentData().toInt() == 1;
+    const bool connected = m_client.isConnected();
+
+    if (m_modbusOnlyPanel)
+        m_modbusOnlyPanel->setEnabled(!tcs && connected);
+    if (m_btnEstop) m_btnEstop->setEnabled(!tcs && connected);
+    if (m_btnBrakesClose) m_btnBrakesClose->setEnabled(!tcs && connected);
+    if (m_btnBrakesOpen) m_btnBrakesOpen->setEnabled(!tcs && connected);
+    if (m_btnEstop2Recover) m_btnEstop2Recover->setEnabled(!tcs && connected);
+    if (m_btnTcsSnapshot) {
+        m_btnTcsSnapshot->setVisible(tcs);
+        m_btnTcsSnapshot->setEnabled(tcs && connected);
+    }
+    if (m_btnTcsPing) {
+        m_btnTcsPing->setVisible(tcs);
+        m_btnTcsPing->setEnabled(tcs && connected);
+    }
+
+    if (m_btnAuto) m_btnAuto->setEnabled(!tcs && connected);
+    if (m_btnManual) m_btnManual->setEnabled(!tcs && connected);
+    if (m_btnHome) m_btnHome->setEnabled(!tcs && connected);
+    if (m_btnReset) m_btnReset->setEnabled(!tcs && connected);
+}
 
 void MainWindow::connectToPlc() {
     QString host = m_hostEdit->text().trimmed();
@@ -656,11 +748,28 @@ void MainWindow::connectToPlc() {
         m_client.connectToPlc(host, static_cast<quint16>(port));
     else
         m_client.connectToTcsService(host, static_cast<quint16>(port));
+    updateControlsForConnectionMode();
     m_pollTimer.start(200); m_chartTimer.start();
 }
 
 void MainWindow::disconnectFromPlc() {
     m_pollTimer.stop(); resetAllLeds(); m_client.disconnect();
+    updateControlsForConnectionMode();
+}
+
+void MainWindow::openBrakes() {
+    if (QMessageBox::warning(this, "确认",
+            "确定要打开全部制动器吗？仅用于维护/调试。",
+            QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes)
+        m_client.openAllBrakes();
+}
+
+void MainWindow::recoverEstop2() {
+    if (QMessageBox::information(this, "急停2恢复",
+            "请先松开旋转急停2 (DI 00035=0)，再确认发送故障复位脉冲。\n"
+            "对应后端: acceptance.py workflow estop2-recover",
+            QMessageBox::Ok | QMessageBox::Cancel) == QMessageBox::Ok)
+        m_client.recoverEstop2();
 }
 
 void MainWindow::emergencyStop() {

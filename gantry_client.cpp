@@ -65,6 +65,8 @@ void GantryClient::connectToTcsService(const QString &host, quint16 port) {
 
     connect(m_tcsSocket, &QTcpSocket::connected, this, [this]() {
         emitLog(QString("TCS 服务已连接 %1:%2").arg(m_host).arg(m_port));
+        sendPing();
+        requestSnapshot();
         emit connected();
     });
     connect(m_tcsSocket, &QTcpSocket::disconnected, this, [this]() {
@@ -226,8 +228,23 @@ void GantryClient::onTcsReadyRead() {
         if (line.isEmpty()) continue;
         QJsonObject obj = parseJsonLine(line);
         if (obj.isEmpty()) continue;
-        emit commandResponse(parseTcsResponse(obj));
+        TcsResponse resp = parseTcsResponse(obj);
+        applyTcsResponse(resp);
+        emit commandResponse(resp);
     }
+}
+
+void GantryClient::applyTcsResponse(const TcsResponse &resp) {
+    if (resp.tcsSnapshot.isEmpty())
+        return;
+    GantryStatus s = gantryStatusFromTcsSnapshot(resp.tcsSnapshot);
+    if (resp.cmd == "move" || resp.cmd == "snapshot") {
+        s.tcsBeamPermit = resp.beamPermit;
+        s.tcsBeamPermitReason = resp.beamPermitReason;
+    }
+    if (resp.cmd == "move")
+        s.positionSetpoint = resp.targetDeg;
+    emit statusUpdated(s);
 }
 
 // ============================================================================
@@ -235,6 +252,10 @@ void GantryClient::onTcsReadyRead() {
 // ============================================================================
 
 void GantryClient::pollStatus() {
+    if (m_mode == ConnMode::Tcs) {
+        requestSnapshot();
+        return;
+    }
     if (m_mode != ConnMode::Modbus || !m_modbusClient) return;
     if (m_modbusClient->state() != QModbusDevice::ConnectedState) return;
 
@@ -443,6 +464,21 @@ void GantryClient::closeAllBrakes() {
     if (m_mode != ConnMode::Modbus || !m_modbusClient) return;
     pulseCoil(m_modbusClient, ModbusAddr::COIL_ALL_BRAKES_CLOSE, m_unitId);
     emitLog("发送: 全部制动器关闭 (16399)");
+}
+
+void GantryClient::openAllBrakes() {
+    if (m_mode != ConnMode::Modbus || !m_modbusClient) return;
+    pulseCoil(m_modbusClient, ModbusAddr::COIL_ALL_BRAKES_OPEN, m_unitId);
+    emitLog("发送: 全部制动器打开 (16398 脉冲)");
+}
+
+void GantryClient::recoverEstop2() {
+    if (m_mode != ConnMode::Modbus || !m_modbusClient) {
+        emitLog("急停2恢复仅支持 Modbus 直连 PLC");
+        return;
+    }
+    pulseCoil(m_modbusClient, ModbusAddr::COIL_RESET, m_unitId);
+    emitLog("发送: 急停2恢复 — 故障复位脉冲 (16384)，请确认急停2已松开");
 }
 
 void GantryClient::requestSnapshot() {

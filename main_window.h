@@ -39,20 +39,33 @@ private slots:
     void moveToPosition();
     void stopManual()    { m_client.stopManualMotion(); }
     void closeBrakes()   { m_client.closeAllBrakes(); }
+    void openBrakes();
+    void recoverEstop2();
+    void requestTcsSnapshot() { m_client.requestSnapshot(); }
+    void sendTcsPing()        { m_client.sendPing(); }
+    void onConnModeChanged(int index);
 
 private:
     void buildUi();
-    QWidget *buildTopPanel();
-    QWidget *buildControlPanel();
+    QWidget *buildTitleBar();
+    QWidget *buildStatusPanel();
+    QWidget *buildParametersPanel();
+    QWidget *buildRightPanel();
+    QWidget *buildConnectionPanel();
+    QWidget *buildMotionPanel();
+    QWidget *buildSafetyPanel();
     QWidget *buildChartPanel();
     QWidget *buildLogPanel();
-    QWidget *buildConnectionPanel();
 
-    // 圆形指示灯工具
     struct LedItem {
         QLabel *dot = nullptr;
         QLabel *text = nullptr;
     };
+
+    static void applyPanelLayout(QBoxLayout *layout);
+    static void applyGroupLayout(QGroupBox *group);
+    static void styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth = 104);
+    void addLedToGrid(QGridLayout *grid, int row, int col, LedItem &item, const QString &label);
     LedItem makeLed(const QString &label);
     void setLedColor(LedItem &led, bool on, bool running = false);
     void updateStatusLeds(const GantryStatus &s);
@@ -60,38 +73,41 @@ private:
     void updateAngleDisplay(const GantryStatus &s);
     void updateParameterDisplay(const GantryStatus &s);
     void updateChart(double angle);
+    void updateControlsForConnectionMode();
 
     GantryClient m_client;
     QTimer m_pollTimer;
 
-    // 连接参数
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;
     QComboBox *m_connModeCombo = nullptr;
     QLabel *m_connStatusLamp = nullptr;
     QLabel *m_connStatusLabel = nullptr;
 
-    // 仪表盘
     GaugeWidget *m_gauge = nullptr;
 
-    // 圆形状态灯
-    LedItem m_ledAuto, m_ledManual, m_ledHoming, m_ledPosition;
+    LedItem m_ledAuto, m_ledManual, m_ledSpeed, m_ledHoming, m_ledPosition;
     LedItem m_ledMotor, m_ledHomingDone, m_ledEstop, m_ledSafety;
-    LedItem m_ledAir, m_ledMotionInhibit, m_ledBeamPermit;
+    LedItem m_ledAir, m_ledBrakes, m_ledMotionInhibit, m_ledBeamPermit;
 
-    // 参数显示
     QLabel *m_labelServoAngle = nullptr, *m_labelAbs01Angle = nullptr;
+    QLabel *m_labelAbs02Angle = nullptr;
     QLabel *m_labelCurrentSpeed = nullptr;
     QLabel *m_labelPositionSetpoint = nullptr, *m_labelSpeedSetpoint = nullptr;
     QLabel *m_labelServo1Torque = nullptr, *m_labelServo2Torque = nullptr;
     QLabel *m_labelSlip1 = nullptr, *m_labelSlip2 = nullptr;
     QLabel *m_labelShearForce = nullptr, *m_labelEstopOvershoot = nullptr;
 
-    // 控制输入
     QDoubleSpinBox *m_targetAngleSpin = nullptr, *m_targetSpeedSpin = nullptr;
     QDoubleSpinBox *m_jogSpeedSpin = nullptr, *m_jogSecondsSpin = nullptr;
 
-    // 曲线
+    QWidget *m_modeGroup = nullptr;
+    QWidget *m_jogGroup = nullptr;
+    QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
+    QPushButton *m_btnReset = nullptr, *m_btnEstop = nullptr, *m_btnBrakesClose = nullptr;
+    QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstop2Recover = nullptr;
+    QPushButton *m_btnTcsSnapshot = nullptr, *m_btnTcsPing = nullptr;
+
     QChart *m_chart = nullptr;
     QLineSeries *m_angleSeries = nullptr;
     QScatterSeries *m_targetScatter = nullptr;
@@ -99,7 +115,6 @@ private:
     QValueAxis *m_angleAxis = nullptr;
     QElapsedTimer m_chartTimer;
 
-    // 日志表格
     QTableWidget *m_logTable = nullptr;
     int m_lastHighlightRow = -1;
     void appendLogRow(const QString &msg);

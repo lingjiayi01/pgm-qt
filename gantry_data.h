@@ -152,8 +152,23 @@ struct GantryStatus {
             || servoFault;
     }
 
-    // 可出束判据 (与 evaluate_beam_permit_placeholder 一致)
+    QString estopLabels() const {
+        QStringList labels;
+        if (plcEstop) labels << "PLC";
+        if (estop1) labels << "E1";
+        if (estop2) labels << "E2";
+        if (estop3) labels << "E3";
+        return labels.isEmpty() ? QString() : labels.join(',');
+    }
+
+    // TCS snapshot 下发的出束判据（优先于本地 beamPermit()）
+    std::optional<bool> tcsBeamPermit;
+    std::optional<QString> tcsBeamPermitReason;
+    std::optional<bool> tcsMotionInhibit;
+
     std::pair<bool, QString> beamPermit(double tol = 0.5) const {
+        if (tcsBeamPermit.has_value())
+            return {*tcsBeamPermit, tcsBeamPermitReason.value_or(QString())};
         if (motionInhibit())
             return {false, QStringLiteral("motion_inhibit=1")};
         if (!autoModeActive)
@@ -174,13 +189,10 @@ struct GantryStatus {
         return {true, QStringLiteral("许可=1(接TCS复核)")};
     }
 
-    QString estopLabels() const {
-        QStringList labels;
-        if (plcEstop) labels << "PLC";
-        if (estop1) labels << "E1";
-        if (estop2) labels << "E2";
-        if (estop3) labels << "E3";
-        return labels.isEmpty() ? QString() : labels.join(',');
+    bool motionInhibitEffective() const {
+        if (tcsMotionInhibit.has_value())
+            return *tcsMotionInhibit;
+        return motionInhibit();
     }
 };
 
@@ -200,7 +212,55 @@ struct TcsResponse {
     double speed = 0.0;
     bool beamPermit = false;
     QString beamPermitReason;
+    QJsonObject tcsSnapshot;
 };
+
+// 将 tcs-serve 返回的 tcs_snapshot 转为 GantryStatus（字段与 gantry_tcs.TcsGantryPublicSignals 一致）
+inline GantryStatus gantryStatusFromTcsSnapshot(const QJsonObject &snap) {
+    GantryStatus s;
+    auto b = [&](const char *k) { return snap.value(k).toBool(false); };
+    s.autoModeActive        = b("di_00000_auto_mode");
+    s.manualModeActive      = b("di_00001_manual_mode");
+    s.homingRunning         = b("di_00003_homing_running");
+    s.positionModeRunning   = b("di_00004_position_mode_running");
+    s.homingDone            = b("di_00005_homing_done");
+    s.motorRunning          = b("di_00006_motor_running");
+    s.zeroSwitch            = b("di_00019_zero_switch");
+    s.plcEstop              = b("di_00033_plc_estop");
+    s.estop1                = b("di_00034_estop1");
+    s.estop2                = b("di_00035_estop2");
+    s.estop3                = b("di_00036_estop3");
+    s.safetyRelayNotReady   = b("di_00037_safety_relay_not_ready");
+    s.angleOutOfRange       = b("di_00042_angle_out_of_range");
+    s.targetAngleOutOfRange = b("di_00043_target_angle_out_of_range");
+    s.air1PressureOk        = b("di_00017_air1_pressure_ok");
+    s.air2PressureOk        = b("di_00018_air2_pressure_ok");
+    s.air1Low               = b("di_00040_air1_low");
+    s.air2Low               = b("di_00041_air2_low");
+    s.limitPos185Ok         = true;
+    s.limitNeg185Ok         = true;
+
+    const auto brakes = snap.value("brakes_open_11_16").toArray();
+    s.brakesOpen.clear();
+    for (const auto &v : brakes)
+        s.brakesOpen.push_back(v.toBool(false));
+
+    auto optD = [&](const char *k) -> std::optional<double> {
+        if (!snap.contains(k) || snap.value(k).isNull()) return std::nullopt;
+        return snap.value(k).toDouble(0.0);
+    };
+    s.servoAngleDeg     = optD("ir_8196_servo_angle_deg");
+    s.abs01AngleDeg     = optD("ir_8192_abs01_angle_deg");
+    s.positionSetpoint  = optD("hr_24578_position_setpoint_deg");
+
+    if (snap.contains("motion_inhibit"))
+        s.tcsMotionInhibit = snap.value("motion_inhibit").toBool(false);
+    if (snap.contains("beam_permit_placeholder")) {
+        s.tcsBeamPermit = snap.value("beam_permit_placeholder").toBool(false);
+        s.tcsBeamPermitReason = snap.value("beam_permit_reason").toString();
+    }
+    return s;
+}
 
 // ============================================================================
 // JSON 行编解码工具
@@ -229,5 +289,6 @@ inline TcsResponse parseTcsResponse(const QJsonObject &obj) {
     r.speed = obj.value("speed").toDouble(0.0);
     r.beamPermit = obj.value("beam_permit_placeholder").toBool(false);
     r.beamPermitReason = obj.value("beam_permit_reason").toString();
+    r.tcsSnapshot = obj.value("tcs_snapshot").toObject();
     return r;
 }
