@@ -49,6 +49,7 @@ private:
     void buildUi();
     QWidget *buildTitleBar();
     QWidget *buildStatusPanel();
+    QWidget *buildGaugePanel();
     QWidget *buildParametersPanel();
     QWidget *buildRightPanel();
     QWidget *buildConnectionPanel();
@@ -62,10 +63,11 @@ private:
         QLabel *text = nullptr;
     };
 
-    static void applyPanelLayout(QBoxLayout *layout);
-    static void applyGroupLayout(QGroupBox *group);
-    static void styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth = 104);
+    static void compactGroupLayout(QLayout *layout);
+    static void styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth = 72);
     void addLedToGrid(QGridLayout *grid, int row, int col, LedItem &item, const QString &label);
+    void addParamCell(QGridLayout *grid, int row, int colBase,
+                      const QString &name, QLabel *&valueOut);
     LedItem makeLed(const QString &label);
     void setLedColor(LedItem &led, bool on, bool running = false);
     void updateStatusLeds(const GantryStatus &s);
@@ -101,8 +103,7 @@ private:
     QDoubleSpinBox *m_targetAngleSpin = nullptr, *m_targetSpeedSpin = nullptr;
     QDoubleSpinBox *m_jogSpeedSpin = nullptr, *m_jogSecondsSpin = nullptr;
 
-    QWidget *m_modeGroup = nullptr;
-    QWidget *m_jogGroup = nullptr;
+    QWidget *m_motionModbusBlock = nullptr;
     QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
     QPushButton *m_btnReset = nullptr, *m_btnEstop = nullptr, *m_btnBrakesClose = nullptr;
     QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstop2Recover = nullptr;
