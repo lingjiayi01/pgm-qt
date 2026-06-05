@@ -255,33 +255,33 @@ void MainWindow::setLedColor(LedItem &led, bool on, bool running) {
 }
 
 // ============================================================================
-// 2. 左上 — 系统状态（3 列紧凑网格）
+// 2. 左上 — 系统状态（双列网格，完整名称）
 // ============================================================================
 
 QWidget *MainWindow::buildStatusPanel() {
     auto *gb = new QGroupBox("系统状态");
     auto *grid = new QGridLayout(gb);
-    grid->setSpacing(kCompactSpacing);
-    grid->setContentsMargins(kGroupInset, kGroupInset + 2, kGroupInset, kGroupInset);
+    grid->setSpacing(2);
+    grid->setContentsMargins(4, 8, 4, 4);
+    grid->setHorizontalSpacing(4);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
-    grid->setColumnStretch(2, 1);
 
-    addLedToGrid(grid, 0, 0, m_ledAuto,          "自动");
-    addLedToGrid(grid, 0, 1, m_ledManual,        "手动");
-    addLedToGrid(grid, 0, 2, m_ledSpeed,         "速度");
-    addLedToGrid(grid, 1, 0, m_ledHoming,        "寻零");
-    addLedToGrid(grid, 1, 1, m_ledPosition,      "定位");
-    addLedToGrid(grid, 1, 2, m_ledMotor,         "电机");
-    addLedToGrid(grid, 2, 0, m_ledHomingDone,    "零完");
-    addLedToGrid(grid, 2, 1, m_ledEstop,         "急停");
-    addLedToGrid(grid, 2, 2, m_ledSafety,        "安全");
-    addLedToGrid(grid, 3, 0, m_ledAir,           "气压");
-    addLedToGrid(grid, 3, 1, m_ledBrakes,        "制动");
-    addLedToGrid(grid, 3, 2, m_ledMotionInhibit, "允动");
-    addLedToGrid(grid, 4, 0, m_ledBeamPermit,    "出束");
+    addLedToGrid(grid, 0, 0, m_ledAuto,          "自动模式");
+    addLedToGrid(grid, 0, 1, m_ledManual,        "手动模式");
+    addLedToGrid(grid, 1, 0, m_ledSpeed,         "速度模式");
+    addLedToGrid(grid, 1, 1, m_ledHoming,        "寻零运行");
+    addLedToGrid(grid, 2, 0, m_ledPosition,      "位置运行");
+    addLedToGrid(grid, 2, 1, m_ledMotor,         "电机运行");
+    addLedToGrid(grid, 3, 0, m_ledHomingDone,    "寻零完成");
+    addLedToGrid(grid, 3, 1, m_ledEstop,         "急停正常");
+    addLedToGrid(grid, 4, 0, m_ledSafety,        "安全继电器");
+    addLedToGrid(grid, 4, 1, m_ledAir,           "气压正常");
+    addLedToGrid(grid, 5, 0, m_ledBrakes,        "制动器关闭");
+    addLedToGrid(grid, 5, 1, m_ledMotionInhibit, "运动允许");
+    addLedToGrid(grid, 6, 0, m_ledBeamPermit,    "可出束");
 
-    gb->setMaximumWidth(kStatusMaxWidth);
+    gb->setMaximumWidth(248);
     gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
     return gb;
 }
