@@ -1,13 +1,56 @@
+# 编译目录
 build/
 cmake-build-*/
+out/
+Debug/
+Release/
+
+# CMake缓存文件（极易漏提交）
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Qt Creator本地配置
+.qtcreator/
 *.pro.user
 *.qml.user
+CMakeLists.txt.user*
+*.creator
+*.files
+*.includes
+*.config
+
+# Qt编译自动生成代码
+*.moc
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+*.qm
+*.qmlc
+
+# 编译产物二进制
 *.exe
 *.dll
-*.o
+*.lib
 *.obj
-*.moc
-*.rcc
-*.ui_*.h
+*.o
+*.ilk
+*.pdb
+*.idb
+
+# 临时、日志、备份
 *.log
 *.tmp
+*.bak
+*~
+*.swp
+.DS_Store
+Thumbs.db
+
+# VS/VSCode配置（多人协作必加）
+.vs/
+.vscode/
+*.suo
+*.vcxproj*
