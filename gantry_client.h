@@ -47,7 +47,7 @@ public:
     void sendPing();
     void pollStatus();  // 由定时器周期性调用
 
-    // 浮点编解码 (BIG_BIG)
+    // 浮点编解码 (Modbus AB-CD: 高低字互换)
     static double decodeFloat(const uint16_t regs[2]);
     static void encodeFloat(double value, uint16_t out[2]);
 

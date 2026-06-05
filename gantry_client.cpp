@@ -111,26 +111,15 @@ bool GantryClient::isConnected() const {
 }
 
 // ============================================================================
-// IEEE754 浮点编解码 (BIG_BIG: 高字在前, 每字大端)
+// IEEE754 浮点编解码 — AB-CD（见 gantry_data.h ModbusFloat）
 // ============================================================================
 
 double GantryClient::decodeFloat(const uint16_t regs[2]) {
-    uint8_t bytes[4];
-    bytes[0] = (regs[0] >> 8) & 0xFF;
-    bytes[1] =  regs[0]       & 0xFF;
-    bytes[2] = (regs[1] >> 8) & 0xFF;
-    bytes[3] =  regs[1]       & 0xFF;
-    float val;
-    std::memcpy(&val, bytes, sizeof(float));
-    return std::round(val * 10000.0) / 10000.0;
+    return ModbusFloat::decodeAbCd(regs);
 }
 
 void GantryClient::encodeFloat(double value, uint16_t out[2]) {
-    float fval = static_cast<float>(value);
-    uint8_t bytes[4];
-    std::memcpy(bytes, &fval, sizeof(float));
-    out[0] = (static_cast<uint16_t>(bytes[0]) << 8) | bytes[1];
-    out[1] = (static_cast<uint16_t>(bytes[2]) << 8) | bytes[3];
+    ModbusFloat::encodeAbCd(value, out);
 }
 
 // ============================================================================
@@ -139,11 +128,16 @@ void GantryClient::encodeFloat(double value, uint16_t out[2]) {
 
 static std::optional<double> extractFloat(const std::vector<uint16_t> &regs,
                                           uint16_t baseAddr,
-                                          uint16_t blockBaseAddr) {
+                                          uint16_t blockBaseAddr,
+                                          bool sanitizeAbs = false) {
     int offset = static_cast<int>(baseAddr) - static_cast<int>(blockBaseAddr);
     if (offset < 0 || offset + 1 >= static_cast<int>(regs.size()))
         return std::nullopt;
-    return GantryClient::decodeFloat(&regs[offset]);
+    uint16_t pair[2] = {regs[offset], regs[offset + 1]};
+    double v = GantryClient::decodeFloat(pair);
+    if (sanitizeAbs)
+        v = ModbusFloat::sanitizeAbsAngle(v);
+    return v;
 }
 
 // ============================================================================
@@ -192,8 +186,8 @@ void GantryClient::buildStatusFromPartial() {
     // 输入寄存器
     if (m_inputRegsValid && m_inputRegs.size() >= 20) {
         const uint16_t base = ModbusAddr::IR_ABS01_ANGLE;
-        s.abs01AngleDeg     = extractFloat(m_inputRegs, ModbusAddr::IR_ABS01_ANGLE,     base);
-        s.abs02AngleDeg     = extractFloat(m_inputRegs, ModbusAddr::IR_ABS02_ANGLE,     base);
+        s.abs01AngleDeg     = extractFloat(m_inputRegs, ModbusAddr::IR_ABS01_ANGLE,     base, true);
+        s.abs02AngleDeg     = extractFloat(m_inputRegs, ModbusAddr::IR_ABS02_ANGLE,     base, true);
         s.servoAngleDeg     = extractFloat(m_inputRegs, ModbusAddr::IR_SERVO_ANGLE,     base);
         s.servoCurrentSpeed = extractFloat(m_inputRegs, ModbusAddr::IR_SERVO_SPEED,     base);
         s.servo1Torque      = extractFloat(m_inputRegs, ModbusAddr::IR_SERVO1_TORQUE,   base);

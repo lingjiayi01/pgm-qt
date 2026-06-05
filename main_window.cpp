@@ -617,7 +617,8 @@ QWidget *MainWindow::buildChartPanel() {
     m_targetScatter->attachAxis(m_timeAxis);
 
     m_angleAxis = new QValueAxis;
-    m_angleAxis->setRange(-185, 185);
+    m_angleAxis->setRange(ModbusAddr::CHART_ANGLE_AXIS_MIN,
+                          ModbusAddr::CHART_ANGLE_AXIS_MAX);
     m_angleAxis->setLabelsColor(QColor(160, 160, 170));
     m_angleAxis->setGridLineColor(QColor(60, 60, 70));
     m_chart->addAxis(m_angleAxis, Qt::AlignLeft);
@@ -769,9 +770,13 @@ void MainWindow::onStatusUpdated(const GantryStatus &s) {
     updateStatusLeds(s);
     updateAngleDisplay(s);
     updateParameterDisplay(s);
-    updateChart(s.abs01AngleDeg.value_or(0.0));
-    if (s.positionSetpoint.has_value())
+    updateChart(ModbusFloat::angleForDisplay(s.abs01AngleDeg));
+    if (s.positionSetpoint.has_value()
+        && ModbusFloat::isDisplayableAngle(s.positionSetpoint)) {
         m_gauge->setTargetAngle(*s.positionSetpoint);
+    } else {
+        m_gauge->setTargetAngle(std::numeric_limits<double>::quiet_NaN());
+    }
 }
 
 void MainWindow::updateStatusLeds(const GantryStatus &s) {
@@ -818,56 +823,49 @@ void MainWindow::resetAllLeds() {
 }
 
 void MainWindow::updateAngleDisplay(const GantryStatus &s) {
-    if (m_gauge)
-        m_gauge->setAngle(s.abs01AngleDeg.value_or(s.servoAngleDeg.value_or(0.0)));
+    if (!m_gauge) return;
+    double ang = ModbusFloat::angleForDisplay(s.abs01AngleDeg);
+    if (ang == 0.0 && !ModbusFloat::isDisplayableAngle(s.abs01AngleDeg))
+        ang = ModbusFloat::angleForDisplay(s.servoAngleDeg);
+    m_gauge->setAngle(ang);
 }
 
 void MainWindow::updateParameterDisplay(const GantryStatus &s) {
-    auto f = [](auto v, int d = 3) {
-        return v.has_value() ? QString::number(*v, 'f', d) : "—";
-    };
-    auto fd = [](auto v) {
-        return v.has_value() ? QString::number(*v, 'f', 2) : "—";
-    };
     auto setVal = [](QLabel *lb, const QString &text) {
         if (!lb) return;
         lb->setText(lb->fontMetrics().elidedText(
             text, Qt::ElideRight, lb->width() > 0 ? lb->width() : kParamValueColWidth));
     };
     if (!m_labelServoAngle) return;
-    setVal(m_labelServoAngle, fd(s.servoAngleDeg));
-    setVal(m_labelAbs01Angle, fd(s.abs01AngleDeg));
-    setVal(m_labelAbs02Angle, fd(s.abs02AngleDeg));
-    setVal(m_labelCurrentSpeed, f(s.servoCurrentSpeed, 2));
-    setVal(m_labelPositionSetpoint, fd(s.positionSetpoint));
-    setVal(m_labelSpeedSetpoint, f(s.speedSetpoint, 2));
-    setVal(m_labelServo1Torque, f(s.servo1Torque, 2));
-    setVal(m_labelServo2Torque, f(s.servo2Torque, 2));
-    setVal(m_labelSlip1, f(s.axialSlip1, 2));
-    setVal(m_labelSlip2, f(s.axialSlip2, 2));
-    setVal(m_labelShearForce, f(s.shearForce, 2));
-    setVal(m_labelEstopOvershoot, fd(s.estopOvershoot));
+    setVal(m_labelServoAngle,        ModbusFloat::formatAngleDegUi(s.servoAngleDeg));
+    setVal(m_labelAbs01Angle,        ModbusFloat::formatAngleDegUi(s.abs01AngleDeg));
+    setVal(m_labelAbs02Angle,        ModbusFloat::formatAngleDegUi(s.abs02AngleDeg));
+    setVal(m_labelCurrentSpeed,      ModbusFloat::formatScalarUi(s.servoCurrentSpeed, 2));
+    setVal(m_labelPositionSetpoint,  ModbusFloat::formatAngleDegUi(s.positionSetpoint));
+    setVal(m_labelSpeedSetpoint,     ModbusFloat::formatScalarUi(s.speedSetpoint, 2));
+    setVal(m_labelServo1Torque,      ModbusFloat::formatScalarUi(s.servo1Torque, 2));
+    setVal(m_labelServo2Torque,      ModbusFloat::formatScalarUi(s.servo2Torque, 2));
+    setVal(m_labelSlip1,             ModbusFloat::formatScalarUi(s.axialSlip1, 2));
+    setVal(m_labelSlip2,             ModbusFloat::formatScalarUi(s.axialSlip2, 2));
+    setVal(m_labelShearForce,        ModbusFloat::formatScalarUi(s.shearForce, 2));
+    setVal(m_labelEstopOvershoot,    ModbusFloat::formatAngleDegUi(s.estopOvershoot));
 }
 
 void MainWindow::updateChart(double angle) {
     if (!m_angleSeries) return;
+    const double y = ModbusFloat::sanitizeAbsAngle(angle);
     QDateTime now = QDateTime::currentDateTime();
-    m_angleSeries->append(now.toMSecsSinceEpoch(), angle);
-    if (m_currentStatus.positionSetpoint.has_value()) {
+    m_angleSeries->append(now.toMSecsSinceEpoch(), y);
+    if (ModbusFloat::isDisplayableAngle(m_currentStatus.positionSetpoint)) {
         m_targetScatter->clear();
-        m_targetScatter->append(now.toMSecsSinceEpoch(), *m_currentStatus.positionSetpoint);
+        m_targetScatter->append(now.toMSecsSinceEpoch(),
+                                *m_currentStatus.positionSetpoint);
+    } else {
+        m_targetScatter->clear();
     }
     m_timeAxis->setRange(now.addSecs(-30), now);
-    if (m_angleSeries->count() > 50) {
-        double lo = 1e9, hi = -1e9;
-        for (int i = std::max(0, m_angleSeries->count() - 50); i < m_angleSeries->count(); ++i) {
-            double y = m_angleSeries->at(i).y();
-            lo = std::min(lo, y);
-            hi = std::max(hi, y);
-        }
-        double m = std::max(5.0, (hi - lo) * 0.2);
-        m_angleAxis->setRange(lo - m, hi + m);
-    }
+    m_angleAxis->setRange(ModbusAddr::CHART_ANGLE_AXIS_MIN,
+                          ModbusAddr::CHART_ANGLE_AXIS_MAX);
 }
 
 // ============================================================================

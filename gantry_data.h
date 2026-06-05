@@ -1,5 +1,6 @@
 #pragma once
 #include <QtCore>
+#include <QtEndian>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -79,7 +80,91 @@ namespace ModbusAddr {
     constexpr uint16_t HR_POSITION_SETPOINT  = 24578;
 
     constexpr double ANGLE_WORK_LIMIT_DEG    = 185.0;
+    constexpr double ANGLE_VALID_MIN_DEG     = -185.0;
+    constexpr double ANGLE_VALID_MAX_DEG     = 185.0;
+    constexpr double CHART_ANGLE_AXIS_MIN    = -200.0;
+    constexpr double CHART_ANGLE_AXIS_MAX    = 200.0;
 }
+
+// ============================================================================
+// Modbus IEEE754 单精度 — 工业 AB-CD（高低字互换，字内大端）
+// 寄存器顺序: regs[0]=低字(CD), regs[1]=高字(AB) → 内存字节序 ABCD → float
+// ============================================================================
+
+namespace ModbusFloat {
+
+inline bool isFiniteFloat(double v) {
+    return std::isfinite(v) && !std::isnan(v);
+}
+
+inline double round4(double v) {
+    return std::round(v * 10000.0) / 10000.0;
+}
+
+inline double decodeAbCd(const uint16_t regs[2]) {
+    // 高低字互换: regs[0]=低字(CD), regs[1]=高字(AB) → 32 位大端 float
+    const quint32 be = (quint32(regs[1]) << 16) | quint32(regs[0]);
+    const quint32 native = qFromBigEndian(be);
+    float val = 0.0f;
+    std::memcpy(&val, &native, sizeof(float));
+    return round4(static_cast<double>(val));
+}
+
+inline void encodeAbCd(double value, uint16_t out[2]) {
+    float fval = static_cast<float>(value);
+    quint32 native = 0;
+    std::memcpy(&native, &fval, sizeof(float));
+    const quint32 be = qToBigEndian(native);
+    out[0] = static_cast<uint16_t>(be & 0xFFFFu);
+    out[1] = static_cast<uint16_t>((be >> 16) & 0xFFFFu);
+}
+
+/** ABS01/ABS02：超出 [-185,185] 或非有限数 → 0.0 */
+inline double sanitizeAbsAngle(double v) {
+    if (!isFiniteFloat(v)
+        || v < ModbusAddr::ANGLE_VALID_MIN_DEG
+        || v > ModbusAddr::ANGLE_VALID_MAX_DEG) {
+        return 0.0;
+    }
+    return round4(v);
+}
+
+inline std::optional<double> sanitizeAbsAngleOptional(const std::optional<double> &v) {
+    if (!v.has_value()) return std::nullopt;
+    return sanitizeAbsAngle(*v);
+}
+
+/** UI/表盘用：非法角度显示为 0 */
+inline double angleForDisplay(const std::optional<double> &v) {
+    if (!v.has_value()) return 0.0;
+    return sanitizeAbsAngle(*v);
+}
+
+inline bool isDisplayableAngle(const std::optional<double> &v) {
+    if (!v.has_value()) return false;
+    const double x = *v;
+    return isFiniteFloat(x)
+        && x >= ModbusAddr::ANGLE_VALID_MIN_DEG
+        && x <= ModbusAddr::ANGLE_VALID_MAX_DEG;
+}
+
+inline QString formatAngleDegUi(const std::optional<double> &v) {
+    if (!isDisplayableAngle(v)) return QStringLiteral("0.00°");
+    return QString::number(*v, 'f', 2) + QStringLiteral("°");
+}
+
+inline bool isReasonableScalar(const std::optional<double> &v, double maxAbs = 1e6) {
+    if (!v.has_value()) return false;
+    const double x = *v;
+    return isFiniteFloat(x) && std::abs(x) <= maxAbs;
+}
+
+inline QString formatScalarUi(const std::optional<double> &v, int decimals = 2) {
+    if (!isReasonableScalar(v)) return QStringLiteral("0.00");
+    return QString::number(*v, 'f', decimals);
+}
+
+} // namespace ModbusFloat
 
 // ============================================================================
 // 数据帧：GantryStatus — 完整的状态快照
@@ -250,8 +335,10 @@ inline GantryStatus gantryStatusFromTcsSnapshot(const QJsonObject &snap) {
         return snap.value(k).toDouble(0.0);
     };
     s.servoAngleDeg     = optD("ir_8196_servo_angle_deg");
-    s.abs01AngleDeg     = optD("ir_8192_abs01_angle_deg");
-    s.positionSetpoint  = optD("hr_24578_position_setpoint_deg");
+    s.abs01AngleDeg     = ModbusFloat::sanitizeAbsAngleOptional(
+        optD("ir_8192_abs01_angle_deg"));
+    s.positionSetpoint  = ModbusFloat::sanitizeAbsAngleOptional(
+        optD("hr_24578_position_setpoint_deg"));
 
     if (snap.contains("motion_inhibit"))
         s.tcsMotionInhibit = snap.value("motion_inhibit").toBool(false);
