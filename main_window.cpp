@@ -9,7 +9,11 @@ constexpr int kGroupInset = 4;
 constexpr int kBtnMinWidth = 72;
 constexpr int kTitleBarHeight = 44;
 constexpr int kStatusMaxWidth = 340;
-constexpr int kRightPanelWidth = 320;
+constexpr int kRightPanelMinWidth = 300;
+constexpr int kRightPanelMaxWidth = 400;
+constexpr int kRightGroupSpacing = 8;
+constexpr int kMotionLayerSpacing = 8;
+constexpr int kSafetyBtnHeight = 32;
 constexpr int kParamNameColWidth = 76;
 constexpr int kParamValueColWidth = 80;
 constexpr int kGaugeMinSize = 200;
@@ -84,15 +88,24 @@ QLabel.paramValue {
 
 void MainWindow::compactGroupLayout(QLayout *layout) {
     if (!layout) return;
-    layout->setSpacing(kCompactSpacing);
-    layout->setContentsMargins(kGroupInset, kGroupInset + 2, kGroupInset, kGroupInset);
+    layout->setSpacing(kLayoutSpacing);
+    layout->setContentsMargins(6, 10, 6, 6);
 }
 
 void MainWindow::styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth) {
     for (auto *btn : buttons) {
         if (!btn) continue;
         btn->setMinimumWidth(minWidth);
-        btn->setMaximumHeight(28);
+        btn->setMinimumHeight(26);
+        btn->setMaximumHeight(30);
+        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+}
+
+static void styleSafetyButtons(const QList<QPushButton *> &buttons) {
+    for (auto *btn : buttons) {
+        if (!btn) continue;
+        btn->setMinimumHeight(kSafetyBtnHeight);
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
 }
@@ -360,16 +373,17 @@ QWidget *MainWindow::buildParametersPanel() {
 
 QWidget *MainWindow::buildRightPanel() {
     auto *wrap = new QWidget;
-    wrap->setFixedWidth(kRightPanelWidth);
+    wrap->setMinimumWidth(kRightPanelMinWidth);
+    wrap->setMaximumWidth(kRightPanelMaxWidth);
     auto *v = new QVBoxLayout(wrap);
-    v->setSpacing(kLayoutSpacing);
+    v->setSpacing(kRightGroupSpacing);
     v->setContentsMargins(0, 0, 0, 0);
 
     v->addWidget(buildConnectionPanel(), 1);
     v->addWidget(buildMotionPanel(), 1);
     v->addWidget(buildSafetyPanel(), 1);
 
-    wrap->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    wrap->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     return wrap;
 }
 
@@ -377,65 +391,81 @@ QWidget *MainWindow::buildConnectionPanel() {
     auto *gb = new QGroupBox("连接设置");
     auto *v = new QVBoxLayout(gb);
     compactGroupLayout(v);
+    v->setSpacing(kLayoutSpacing);
 
-    // 主机、端口、协议 — 横向一排
-    auto *row1 = new QHBoxLayout;
-    row1->setSpacing(kCompactSpacing);
+    // 输入区 + 连接/断开（右侧同宽并排）
+    auto *mainRow = new QHBoxLayout;
+    mainRow->setSpacing(kLayoutSpacing);
+
+    auto *inputs = new QHBoxLayout;
+    inputs->setSpacing(kCompactSpacing);
     auto *hostLb = new QLabel("主机");
-    hostLb->setFixedWidth(28);
+    hostLb->setFixedWidth(32);
     m_hostEdit = new QLineEdit("192.168.10.1");
-    m_hostEdit->setMaximumWidth(108);
+    m_hostEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *portLb = new QLabel("端口");
-    portLb->setFixedWidth(28);
+    portLb->setFixedWidth(32);
     m_portEdit = new QLineEdit("510");
-    m_portEdit->setMaximumWidth(48);
+    m_portEdit->setFixedWidth(52);
     auto *protoLb = new QLabel("协议");
-    protoLb->setFixedWidth(28);
+    protoLb->setFixedWidth(32);
     m_connModeCombo = new QComboBox;
     m_connModeCombo->addItem("Modbus", 0);
     m_connModeCombo->addItem("TCS", 1);
+    m_connModeCombo->setMinimumWidth(72);
     m_connModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(m_connModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onConnModeChanged);
-    row1->addWidget(hostLb);
-    row1->addWidget(m_hostEdit, 1);
-    row1->addWidget(portLb);
-    row1->addWidget(m_portEdit);
-    row1->addWidget(protoLb);
-    row1->addWidget(m_connModeCombo, 1);
-    v->addLayout(row1);
+    inputs->addWidget(hostLb);
+    inputs->addWidget(m_hostEdit, 2);
+    inputs->addWidget(portLb);
+    inputs->addWidget(m_portEdit);
+    inputs->addWidget(protoLb);
+    inputs->addWidget(m_connModeCombo, 1);
 
-    // 连接 / 断开 并排
-    auto *row2 = new QHBoxLayout;
-    row2->setSpacing(kCompactSpacing);
     auto *btnC = new QPushButton("连接");
     btnC->setObjectName("btnConnect");
     connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToPlc);
     auto *btnD = new QPushButton("断开");
     btnD->setObjectName("btnDisconnect");
     connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromPlc);
+    styleUniformButtons({btnC, btnD}, 0);
+
+    auto *btnRow = new QHBoxLayout;
+    btnRow->setSpacing(kLayoutSpacing);
+    btnRow->setContentsMargins(0, 0, 0, 0);
+    btnRow->addWidget(btnC, 1);
+    btnRow->addWidget(btnD, 1);
+
+    mainRow->addLayout(inputs, 1);
+    mainRow->addLayout(btnRow, 0);
+    v->addLayout(mainRow);
+
+    // TCS 辅助按钮（紧凑一行，不占主操作区）
+    auto *tcsRow = new QHBoxLayout;
+    tcsRow->setSpacing(kCompactSpacing);
     m_btnTcsSnapshot = new QPushButton("快照");
     m_btnTcsSnapshot->setToolTip("TCS: snapshot");
     connect(m_btnTcsSnapshot, &QPushButton::clicked, this, &MainWindow::requestTcsSnapshot);
     m_btnTcsPing = new QPushButton("Ping");
     connect(m_btnTcsPing, &QPushButton::clicked, this, &MainWindow::sendTcsPing);
-    styleUniformButtons({btnC, btnD, m_btnTcsSnapshot, m_btnTcsPing});
-    row2->addWidget(btnC, 1);
-    row2->addWidget(btnD, 1);
-    row2->addWidget(m_btnTcsSnapshot, 1);
-    row2->addWidget(m_btnTcsPing, 1);
-    v->addLayout(row2);
+    styleUniformButtons({m_btnTcsSnapshot, m_btnTcsPing}, 0);
+    tcsRow->addWidget(m_btnTcsSnapshot, 1);
+    tcsRow->addWidget(m_btnTcsPing, 1);
+    v->addLayout(tcsRow);
 
-    auto *row3 = new QHBoxLayout;
-    row3->setSpacing(6);
+    auto *statusRow = new QHBoxLayout;
+    statusRow->setSpacing(6);
+    statusRow->setContentsMargins(0, 2, 0, 0);
     m_connStatusLamp = new QLabel;
     m_connStatusLamp->setFixedSize(12, 12);
     m_connStatusLamp->setStyleSheet("background-color:#d04040; border-radius:6px;");
     m_connStatusLabel = new QLabel("已断开");
     m_connStatusLabel->setStyleSheet("color:#d04040; font-size:9pt; font-weight:bold;");
-    row3->addWidget(m_connStatusLamp);
-    row3->addWidget(m_connStatusLabel, 1);
-    v->addLayout(row3);
+    statusRow->addWidget(m_connStatusLamp);
+    statusRow->addWidget(m_connStatusLabel, 1);
+    v->addLayout(statusRow);
+    v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return gb;
@@ -445,16 +475,16 @@ QWidget *MainWindow::buildMotionPanel() {
     auto *gb = new QGroupBox("运动控制");
     auto *v = new QVBoxLayout(gb);
     compactGroupLayout(v);
-    v->setSpacing(kLayoutSpacing);
+    v->setSpacing(kMotionLayerSpacing);
 
     m_motionModbusBlock = new QWidget;
     auto *modbusV = new QVBoxLayout(m_motionModbusBlock);
-    modbusV->setSpacing(kLayoutSpacing);
+    modbusV->setSpacing(kMotionLayerSpacing);
     modbusV->setContentsMargins(0, 0, 0, 0);
 
-    // ① 模式按钮行
+    // ① 模式：四按钮等宽整行
     auto *modeRow = new QHBoxLayout;
-    modeRow->setSpacing(kCompactSpacing);
+    modeRow->setSpacing(kLayoutSpacing);
     m_btnAuto = new QPushButton("自动");
     connect(m_btnAuto, &QPushButton::clicked, this, &MainWindow::setAutoMode);
     m_btnManual = new QPushButton("手动");
@@ -463,78 +493,88 @@ QWidget *MainWindow::buildMotionPanel() {
     connect(m_btnHome, &QPushButton::clicked, this, &MainWindow::startHoming);
     m_btnReset = new QPushButton("复位");
     connect(m_btnReset, &QPushButton::clicked, this, &MainWindow::resetFault);
-    styleUniformButtons({m_btnAuto, m_btnManual, m_btnHome, m_btnReset});
+    styleUniformButtons({m_btnAuto, m_btnManual, m_btnHome, m_btnReset}, 0);
     modeRow->addWidget(m_btnAuto, 1);
     modeRow->addWidget(m_btnManual, 1);
     modeRow->addWidget(m_btnHome, 1);
     modeRow->addWidget(m_btnReset, 1);
     modbusV->addLayout(modeRow);
 
-    // ② 点动参数 + 启停按钮行
+    // ② 点动：参数组 + 三按钮组
     auto *jogRow = new QHBoxLayout;
-    jogRow->setSpacing(kCompactSpacing);
+    jogRow->setSpacing(kLayoutSpacing);
+    auto *jogParams = new QHBoxLayout;
+    jogParams->setSpacing(kCompactSpacing);
     auto *jogSpdLb = new QLabel("速度");
-    jogSpdLb->setFixedWidth(28);
+    jogSpdLb->setFixedWidth(32);
     m_jogSpeedSpin = new QDoubleSpinBox;
     m_jogSpeedSpin->setRange(0.1, 20.0);
     m_jogSpeedSpin->setValue(3.0);
-    m_jogSpeedSpin->setSuffix("°/s");
+    m_jogSpeedSpin->setSuffix(" °/s");
     m_jogSpeedSpin->setDecimals(1);
-    m_jogSpeedSpin->setMaximumWidth(72);
+    m_jogSpeedSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *jogSecLb = new QLabel("时长");
-    jogSecLb->setFixedWidth(28);
+    jogSecLb->setFixedWidth(32);
     m_jogSecondsSpin = new QDoubleSpinBox;
     m_jogSecondsSpin->setRange(0.1, 60.0);
     m_jogSecondsSpin->setValue(1.0);
-    m_jogSecondsSpin->setSuffix("s");
+    m_jogSecondsSpin->setSuffix(" s");
     m_jogSecondsSpin->setDecimals(1);
-    m_jogSecondsSpin->setMaximumWidth(64);
+    m_jogSecondsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    jogParams->addWidget(jogSpdLb);
+    jogParams->addWidget(m_jogSpeedSpin, 1);
+    jogParams->addWidget(jogSecLb);
+    jogParams->addWidget(m_jogSecondsSpin, 1);
+
+    auto *jogBtns = new QHBoxLayout;
+    jogBtns->setSpacing(kLayoutSpacing);
     auto *btnFwd = new QPushButton("正转");
     auto *btnRev = new QPushButton("反转");
     auto *btnStop = new QPushButton("停止");
     connect(btnFwd, &QPushButton::clicked, this, &MainWindow::jogFwd);
     connect(btnRev, &QPushButton::clicked, this, &MainWindow::jogRev);
     connect(btnStop, &QPushButton::clicked, this, &MainWindow::stopManual);
-    styleUniformButtons({btnFwd, btnRev, btnStop});
-    jogRow->addWidget(jogSpdLb);
-    jogRow->addWidget(m_jogSpeedSpin);
-    jogRow->addWidget(jogSecLb);
-    jogRow->addWidget(m_jogSecondsSpin);
-    jogRow->addWidget(btnFwd, 1);
-    jogRow->addWidget(btnRev, 1);
-    jogRow->addWidget(btnStop, 1);
+    styleUniformButtons({btnFwd, btnRev, btnStop}, 0);
+    jogBtns->addWidget(btnFwd, 1);
+    jogBtns->addWidget(btnRev, 1);
+    jogBtns->addWidget(btnStop, 1);
+
+    jogRow->addLayout(jogParams, 1);
+    jogRow->addLayout(jogBtns, 1);
     modbusV->addLayout(jogRow);
     v->addWidget(m_motionModbusBlock);
 
-    // ③ 定位参数 + 执行按钮行
-    auto *posRow = new QHBoxLayout;
-    posRow->setSpacing(kCompactSpacing);
+    // ③ 定位：角度+速度一行，执行按钮独占下一行
+    auto *posInputRow = new QHBoxLayout;
+    posInputRow->setSpacing(kLayoutSpacing);
     auto *angLb = new QLabel("角度");
-    angLb->setFixedWidth(28);
+    angLb->setFixedWidth(32);
     m_targetAngleSpin = new QDoubleSpinBox;
     m_targetAngleSpin->setRange(-185.0, 185.0);
     m_targetAngleSpin->setValue(0.0);
-    m_targetAngleSpin->setSuffix("°");
+    m_targetAngleSpin->setSuffix(" °");
     m_targetAngleSpin->setDecimals(2);
-    m_targetAngleSpin->setMaximumWidth(80);
+    m_targetAngleSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *spdLb = new QLabel("速度");
-    spdLb->setFixedWidth(28);
+    spdLb->setFixedWidth(32);
     m_targetSpeedSpin = new QDoubleSpinBox;
     m_targetSpeedSpin->setRange(0.1, 20.0);
     m_targetSpeedSpin->setValue(3.0);
-    m_targetSpeedSpin->setSuffix("°/s");
+    m_targetSpeedSpin->setSuffix(" °/s");
     m_targetSpeedSpin->setDecimals(1);
-    m_targetSpeedSpin->setMaximumWidth(72);
+    m_targetSpeedSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    posInputRow->addWidget(angLb);
+    posInputRow->addWidget(m_targetAngleSpin, 1);
+    posInputRow->addWidget(spdLb);
+    posInputRow->addWidget(m_targetSpeedSpin, 1);
+    v->addLayout(posInputRow);
+
     auto *btnMove = new QPushButton("执行定位");
     btnMove->setObjectName("btnMove");
     connect(btnMove, &QPushButton::clicked, this, &MainWindow::moveToPosition);
-    styleUniformButtons({btnMove});
-    posRow->addWidget(angLb);
-    posRow->addWidget(m_targetAngleSpin);
-    posRow->addWidget(spdLb);
-    posRow->addWidget(m_targetSpeedSpin);
-    posRow->addWidget(btnMove, 1);
-    v->addLayout(posRow);
+    styleUniformButtons({btnMove}, 0);
+    v->addWidget(btnMove);
+    v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     updateControlsForConnectionMode();
@@ -543,17 +583,17 @@ QWidget *MainWindow::buildMotionPanel() {
 
 QWidget *MainWindow::buildSafetyPanel() {
     auto *gb = new QGroupBox("安全控制");
-    auto *g = new QGridLayout(gb);
-    compactGroupLayout(g);
-    for (int r = 1; r <= 4; ++r)
-        g->setRowStretch(r, 1);
+    auto *v = new QVBoxLayout(gb);
+    compactGroupLayout(v);
+    v->setSpacing(kLayoutSpacing);
 
     auto *estopTitle = new QLabel("紧急停止");
-    estopTitle->setObjectName("gbEstop");
     estopTitle->setStyleSheet(
         "background-color:#8b2020; color:#fff; font-weight:bold;"
-        "padding:4px 8px; border-radius:3px; font-size:9pt;");
+        "padding:6px 10px; border-radius:3px; font-size:10pt;");
     estopTitle->setAlignment(Qt::AlignCenter);
+    estopTitle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    v->addWidget(estopTitle);
 
     m_btnEstop = new QPushButton("触发急停");
     m_btnEstop->setObjectName("btnEstop");
@@ -561,19 +601,25 @@ QWidget *MainWindow::buildSafetyPanel() {
 
     m_btnBrakesClose = new QPushButton("关闭制动");
     connect(m_btnBrakesClose, &QPushButton::clicked, this, &MainWindow::closeBrakes);
+
     m_btnBrakesOpen = new QPushButton("打开制动");
     connect(m_btnBrakesOpen, &QPushButton::clicked, this, &MainWindow::openBrakes);
+
     m_btnEstop2Recover = new QPushButton("急停2恢复");
     m_btnEstop2Recover->setToolTip("松开急停2后复位");
     connect(m_btnEstop2Recover, &QPushButton::clicked, this, &MainWindow::recoverEstop2);
 
-    styleUniformButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstop2Recover});
+    styleSafetyButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstop2Recover});
 
-    g->addWidget(estopTitle,       0, 0);
-    g->addWidget(m_btnEstop,         1, 0);
-    g->addWidget(m_btnBrakesClose,   2, 0);
-    g->addWidget(m_btnBrakesOpen,    3, 0);
-    g->addWidget(m_btnEstop2Recover, 4, 0);
+    v->addStretch(1);
+    v->addWidget(m_btnEstop);
+    v->addStretch(1);
+    v->addWidget(m_btnBrakesClose);
+    v->addStretch(1);
+    v->addWidget(m_btnBrakesOpen);
+    v->addStretch(1);
+    v->addWidget(m_btnEstop2Recover);
+    v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return gb;
