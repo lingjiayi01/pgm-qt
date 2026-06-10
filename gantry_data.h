@@ -282,8 +282,33 @@ struct GantryStatus {
 };
 
 // ============================================================================
-// TCS 响应解析
+// HTTP API 响应解析
 // ============================================================================
+
+struct ApiResponse {
+    bool ok = false;
+    QString error;
+    QString errorCode;
+    QJsonObject data;
+    QString timestamp;
+};
+
+inline ApiResponse parseApiResponse(const QByteArray &body) {
+    ApiResponse r;
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &err);
+    if (err.error != QJsonParseError::NoError) {
+        r.error = err.errorString();
+        return r;
+    }
+    const QJsonObject obj = doc.object();
+    r.ok = obj.value(QStringLiteral("ok")).toBool(false);
+    r.error = obj.value(QStringLiteral("error")).toString();
+    r.errorCode = obj.value(QStringLiteral("error_code")).toString();
+    r.timestamp = obj.value(QStringLiteral("timestamp")).toString();
+    r.data = obj.value(QStringLiteral("data")).toObject();
+    return r;
+}
 
 struct TcsResponse {
     bool ok = false;
@@ -300,7 +325,7 @@ struct TcsResponse {
     QJsonObject tcsSnapshot;
 };
 
-// 将 tcs-serve 返回的 tcs_snapshot 转为 GantryStatus（字段与 gantry_tcs.TcsGantryPublicSignals 一致）
+// 将 tcs-serve / API tcs_snapshot 转为 GantryStatus
 inline GantryStatus gantryStatusFromTcsSnapshot(const QJsonObject &snap) {
     GantryStatus s;
     auto b = [&](const char *k) { return snap.value(k).toBool(false); };
@@ -349,8 +374,114 @@ inline GantryStatus gantryStatusFromTcsSnapshot(const QJsonObject &snap) {
     return s;
 }
 
+// 将 REST /api/v1/status 的 data 转为 GantryStatus
+inline GantryStatus gantryStatusFromApiData(const QJsonObject &data) {
+    GantryStatus s;
+    const QJsonObject snap = data.value(QStringLiteral("tcs_snapshot")).toObject();
+    if (!snap.isEmpty())
+        s = gantryStatusFromTcsSnapshot(snap);
+
+    const QJsonArray bitsArr = data.value(QStringLiteral("discrete_bits")).toArray();
+    if (!bitsArr.isEmpty()) {
+        s.rawDiscreteBits.clear();
+        s.rawDiscreteBits.reserve(bitsArr.size());
+        for (const auto &v : bitsArr)
+            s.rawDiscreteBits.push_back(v.toBool(false));
+
+        auto b = [&](uint16_t i) -> bool {
+            return i < s.rawDiscreteBits.size() ? s.rawDiscreteBits[i] : false;
+        };
+        s.autoModeActive        = b(ModbusAddr::DI_AUTO_ACTIVE);
+        s.manualModeActive      = b(ModbusAddr::DI_MANUAL_ACTIVE);
+        s.speedModeRunning      = b(ModbusAddr::DI_SPEED_MODE_RUNNING);
+        s.homingRunning         = b(ModbusAddr::DI_HOMING_RUNNING);
+        s.positionModeRunning   = b(ModbusAddr::DI_POSITION_RUNNING);
+        s.homingDone            = b(ModbusAddr::DI_HOMING_DONE);
+        s.motorRunning          = b(ModbusAddr::DI_MOTOR_RUNNING);
+        s.zeroSwitch            = b(ModbusAddr::DI_ZERO_SWITCH);
+        s.plcEstop              = b(ModbusAddr::DI_ESTOP_PLC);
+        s.estop1                = b(ModbusAddr::DI_ESTOP1);
+        s.estop2                = b(ModbusAddr::DI_ESTOP2);
+        s.estop3                = b(ModbusAddr::DI_ESTOP3);
+        s.safetyRelayNotReady   = b(ModbusAddr::DI_SAFETY_RELAY_NOT_OK);
+        s.angleOutOfRange       = b(ModbusAddr::DI_ANGLE_OUT_RANGE);
+        s.targetAngleOutOfRange = b(ModbusAddr::DI_TARGET_ANGLE_OUT);
+        s.air1PressureOk        = b(ModbusAddr::DI_AIR1_PRESSURE_OK);
+        s.air2PressureOk        = b(ModbusAddr::DI_AIR2_PRESSURE_OK);
+        s.air1Low               = b(ModbusAddr::DI_AIR1_LOW);
+        s.air2Low               = b(ModbusAddr::DI_AIR2_LOW);
+        s.limitPos185Ok         = b(ModbusAddr::DI_LIMIT_POS_185_OK);
+        s.limitNeg185Ok         = b(ModbusAddr::DI_LIMIT_NEG_185_OK);
+        s.atPosLimit            = b(ModbusAddr::DI_AT_POS_LIMIT);
+        s.atNegLimit            = b(ModbusAddr::DI_AT_NEG_LIMIT);
+        s.brakesOpen.clear();
+        for (int i = ModbusAddr::DI_BRAKE1_OPEN; i <= ModbusAddr::DI_BRAKE6_OPEN; ++i)
+            s.brakesOpen.push_back(b(static_cast<uint16_t>(i)));
+    }
+
+    const QJsonObject analog = data.value(QStringLiteral("analog")).toObject();
+    auto optFrom = [](const QJsonObject &obj, const char *k) -> std::optional<double> {
+        if (!obj.contains(k) || obj.value(k).isNull()) return std::nullopt;
+        return obj.value(k).toDouble(0.0);
+    };
+    auto optD = [&](const char *k) { return optFrom(analog, k); };
+
+    if (!analog.isEmpty()) {
+        if (analog.contains("ir_8194_abs02_angle_deg"))
+            s.abs02AngleDeg = ModbusFloat::sanitizeAbsAngleOptional(
+                optD("ir_8194_abs02_angle_deg"));
+        if (analog.contains("ir_8198_servo_speed"))
+            s.servoCurrentSpeed = optD("ir_8198_servo_speed");
+        if (analog.contains("ir_8200_servo1_torque"))
+            s.servo1Torque = optD("ir_8200_servo1_torque");
+        if (analog.contains("ir_8202_servo2_torque"))
+            s.servo2Torque = optD("ir_8202_servo2_torque");
+        if (analog.contains("ir_8204_axial_slip1"))
+            s.axialSlip1 = optD("ir_8204_axial_slip1");
+        if (analog.contains("ir_8206_axial_slip2"))
+            s.axialSlip2 = optD("ir_8206_axial_slip2");
+        if (analog.contains("ir_8208_shear_force"))
+            s.shearForce = optD("ir_8208_shear_force");
+        if (analog.contains("ir_8210_estop_overshoot"))
+            s.estopOvershoot = optD("ir_8210_estop_overshoot");
+        if (analog.contains("hr_24576_speed_setpoint_deg"))
+            s.speedSetpoint = optD("hr_24576_speed_setpoint_deg");
+    }
+
+    if (data.contains(QStringLiteral("beam_permit_placeholder"))) {
+        s.tcsBeamPermit = data.value(QStringLiteral("beam_permit_placeholder")).toBool(false);
+        s.tcsBeamPermitReason = data.value(QStringLiteral("beam_permit_reason")).toString();
+    }
+    if (snap.contains(QStringLiteral("motion_inhibit")))
+        s.tcsMotionInhibit = snap.value(QStringLiteral("motion_inhibit")).toBool(false);
+
+    return s;
+}
+
+inline TcsResponse apiResponseToCommandResponse(const ApiResponse &api, const QString &cmd) {
+    TcsResponse r;
+    r.ok = api.ok;
+    r.cmd = cmd;
+    r.error = api.error;
+    if (!api.ok)
+        return r;
+    const QJsonObject d = api.data;
+    r.motionComplete = d.value(QStringLiteral("success")).toBool(
+        d.value(QStringLiteral("motion_complete")).toBool(false));
+    r.motionDetail = d.value(QStringLiteral("detail")).toString(
+        d.value(QStringLiteral("motion_detail")).toString());
+    r.targetDeg = d.value(QStringLiteral("target_deg")).toDouble(0.0);
+    r.speed = d.value(QStringLiteral("speed")).toDouble(0.0);
+    if (d.contains(QStringLiteral("tcs_snapshot")))
+        r.tcsSnapshot = d.value(QStringLiteral("tcs_snapshot")).toObject();
+    r.beamPermit = d.value(QStringLiteral("beam_permit_placeholder")).toBool(false);
+    r.beamPermitReason = d.value(QStringLiteral("beam_permit_reason")).toString();
+    r.pong = cmd == QStringLiteral("ping") && api.ok;
+    return r;
+}
+
 // ============================================================================
-// JSON 行编解码工具
+// JSON 行编解码工具（兼容旧 TCS 行协议）
 // ============================================================================
 
 inline QByteArray jsonLine(const QJsonObject &obj) {

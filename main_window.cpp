@@ -46,10 +46,11 @@ QPushButton {
 QPushButton:hover { background-color: #3d3d4a; border-color: #6a6a78; }
 QPushButton:pressed { background-color: #2a2a32; }
 QPushButton#btnEstop {
-    background-color: #333340; border: 1px solid #c04040;
-    color: #ff9090; font-weight: bold;
+    background-color: #b82020; border: 1px solid #ff5050;
+    color: #ffffff; font-weight: bold;
 }
-QPushButton#btnEstop:hover { background-color: #3d3d4a; }
+QPushButton#btnEstop:hover { background-color: #d02828; }
+QPushButton#btnEstop:pressed { background-color: #901818; }
 QPushButton#btnConnect {
     background-color: #204020; border-color: #40a040; color: #80ff80;
 }
@@ -124,7 +125,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(&m_client, &GantryClient::connected, this, [this]() {
         m_connStatusLamp->setStyleSheet(
             "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText(m_client.isTcsMode() ? "已连接 (TCS)" : "已连接 (Modbus)");
+        m_connStatusLabel->setText("已连接 (HTTP)");
         m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
         updateControlsForConnectionMode();
         onLogMessage("=== 已连接 ===");
@@ -208,7 +209,7 @@ QWidget *MainWindow::buildTitleBar() {
     title->setObjectName("titleText");
     h->addWidget(title);
 
-    auto *sub = new QLabel("Proton Gantry Modbus / TCS 上位机");
+    auto *sub = new QLabel("Proton Gantry HTTP REST 上位机");
     sub->setObjectName("titleSub");
     h->addWidget(sub);
     h->addStretch();
@@ -401,36 +402,24 @@ QWidget *MainWindow::buildConnectionPanel() {
     compactGroupLayout(v);
     v->setSpacing(kLayoutSpacing);
 
-    // 输入区 + 连接/断开（右侧同宽并排）
-    auto *mainRow = new QHBoxLayout;
-    mainRow->setSpacing(kLayoutSpacing);
-
-    auto *inputs = new QHBoxLayout;
-    inputs->setSpacing(kCompactSpacing);
+    auto *inputRow = new QHBoxLayout;
+    inputRow->setSpacing(kCompactSpacing);
     auto *hostLb = new QLabel("主机");
-    hostLb->setFixedWidth(32);
-    m_hostEdit = new QLineEdit("192.168.10.1");
+    hostLb->setFixedWidth(36);
+    m_hostEdit = new QLineEdit("127.0.0.1");
     m_hostEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *portLb = new QLabel("端口");
-    portLb->setFixedWidth(32);
-    m_portEdit = new QLineEdit("510");
-    m_portEdit->setFixedWidth(52);
-    auto *protoLb = new QLabel("协议");
-    protoLb->setFixedWidth(32);
-    m_connModeCombo = new QComboBox;
-    m_connModeCombo->addItem("Modbus", 0);
-    m_connModeCombo->addItem("TCS", 1);
-    m_connModeCombo->setMinimumWidth(72);
-    m_connModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(m_connModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onConnModeChanged);
-    inputs->addWidget(hostLb);
-    inputs->addWidget(m_hostEdit, 2);
-    inputs->addWidget(portLb);
-    inputs->addWidget(m_portEdit);
-    inputs->addWidget(protoLb);
-    inputs->addWidget(m_connModeCombo, 1);
+    portLb->setFixedWidth(36);
+    m_portEdit = new QLineEdit("8080");
+    m_portEdit->setFixedWidth(56);
+    inputRow->addWidget(hostLb);
+    inputRow->addWidget(m_hostEdit, 2);
+    inputRow->addWidget(portLb);
+    inputRow->addWidget(m_portEdit);
+    v->addLayout(inputRow);
 
+    auto *actionRow = new QHBoxLayout;
+    actionRow->setSpacing(kLayoutSpacing);
     auto *btnC = new QPushButton("连接");
     btnC->setObjectName("btnConnect");
     connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToPlc);
@@ -438,41 +427,18 @@ QWidget *MainWindow::buildConnectionPanel() {
     btnD->setObjectName("btnDisconnect");
     connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromPlc);
     styleUniformButtons({btnC, btnD}, 0);
+    actionRow->addWidget(btnC, 1);
+    actionRow->addWidget(btnD, 1);
 
-    auto *btnRow = new QHBoxLayout;
-    btnRow->setSpacing(kLayoutSpacing);
-    btnRow->setContentsMargins(0, 0, 0, 0);
-    btnRow->addWidget(btnC, 1);
-    btnRow->addWidget(btnD, 1);
-
-    mainRow->addLayout(inputs, 1);
-    mainRow->addLayout(btnRow, 0);
-    v->addLayout(mainRow);
-
-    // TCS 辅助按钮（紧凑一行，不占主操作区）
-    auto *tcsRow = new QHBoxLayout;
-    tcsRow->setSpacing(kCompactSpacing);
-    m_btnTcsSnapshot = new QPushButton("快照");
-    m_btnTcsSnapshot->setToolTip("TCS: snapshot");
-    connect(m_btnTcsSnapshot, &QPushButton::clicked, this, &MainWindow::requestTcsSnapshot);
-    m_btnTcsPing = new QPushButton("Ping");
-    connect(m_btnTcsPing, &QPushButton::clicked, this, &MainWindow::sendTcsPing);
-    styleUniformButtons({m_btnTcsSnapshot, m_btnTcsPing}, 0);
-    tcsRow->addWidget(m_btnTcsSnapshot, 1);
-    tcsRow->addWidget(m_btnTcsPing, 1);
-    v->addLayout(tcsRow);
-
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setSpacing(6);
-    statusRow->setContentsMargins(0, 2, 0, 0);
     m_connStatusLamp = new QLabel;
-    m_connStatusLamp->setFixedSize(12, 12);
-    m_connStatusLamp->setStyleSheet("background-color:#d04040; border-radius:6px;");
+    m_connStatusLamp->setFixedSize(14, 14);
+    m_connStatusLamp->setStyleSheet(
+        "background-color:#d04040; border-radius:7px; min-width:14px; min-height:14px;");
     m_connStatusLabel = new QLabel("已断开");
-    m_connStatusLabel->setStyleSheet("color:#d04040; font-size:9pt; font-weight:bold;");
-    statusRow->addWidget(m_connStatusLamp);
-    statusRow->addWidget(m_connStatusLabel, 1);
-    v->addLayout(statusRow);
+    m_connStatusLabel->setStyleSheet("color:#d04040; font-size:10pt; font-weight:bold;");
+    actionRow->addWidget(m_connStatusLamp, 0, Qt::AlignVCenter);
+    actionRow->addWidget(m_connStatusLabel, 1, Qt::AlignVCenter);
+    v->addLayout(actionRow);
     v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -594,14 +560,6 @@ QWidget *MainWindow::buildSafetyPanel() {
     auto *v = new QVBoxLayout(gb);
     compactGroupLayout(v);
     v->setSpacing(kLayoutSpacing);
-
-    auto *estopTitle = new QLabel("紧急停止");
-    estopTitle->setStyleSheet(
-        "background-color:#8b2020; color:#fff; font-weight:bold;"
-        "padding:6px 10px; border-radius:3px; font-size:10pt;");
-    estopTitle->setAlignment(Qt::AlignCenter);
-    estopTitle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    v->addWidget(estopTitle);
 
     m_btnEstop = new QPushButton("触发急停");
     m_btnEstop->setObjectName("btnEstop");
@@ -944,43 +902,24 @@ void MainWindow::onLogMessage(const QString &msg) { appendLogRow(msg); }
 
 void MainWindow::onConnectionError(const QString &err) { onLogMessage("通信错误: " + err); }
 
-void MainWindow::onConnModeChanged(int index) {
-    if (index == 0) {
-        if (m_hostEdit->text() == "127.0.0.1") m_hostEdit->setText("192.168.10.1");
-        if (m_portEdit->text() == "5510") m_portEdit->setText("510");
-    } else {
-        if (m_hostEdit->text() == "192.168.10.1") m_hostEdit->setText("127.0.0.1");
-        if (m_portEdit->text() == "510") m_portEdit->setText("5510");
-    }
-    updateControlsForConnectionMode();
-}
-
 void MainWindow::updateControlsForConnectionMode() {
-    const bool tcs = m_connModeCombo && m_connModeCombo->currentData().toInt() == 1;
     const bool connected = m_client.isConnected();
 
-    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(!tcs && connected);
-    if (m_btnEstop) m_btnEstop->setEnabled(!tcs && connected);
-    if (m_btnBrakesClose) m_btnBrakesClose->setEnabled(!tcs && connected);
-    if (m_btnBrakesOpen) m_btnBrakesOpen->setEnabled(!tcs && connected);
-    if (m_btnEstop2Recover) m_btnEstop2Recover->setEnabled(!tcs && connected);
-    if (m_btnTcsSnapshot) {
-        m_btnTcsSnapshot->setVisible(tcs);
-        m_btnTcsSnapshot->setEnabled(tcs && connected);
-    }
-    if (m_btnTcsPing) {
-        m_btnTcsPing->setVisible(tcs);
-        m_btnTcsPing->setEnabled(tcs && connected);
-    }
+    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(connected);
+    if (m_btnAuto) m_btnAuto->setEnabled(connected);
+    if (m_btnManual) m_btnManual->setEnabled(connected);
+    if (m_btnHome) m_btnHome->setEnabled(connected);
+    if (m_btnReset) m_btnReset->setEnabled(connected);
+    if (m_btnEstop) m_btnEstop->setEnabled(connected);
+    if (m_btnBrakesClose) m_btnBrakesClose->setEnabled(connected);
+    if (m_btnBrakesOpen) m_btnBrakesOpen->setEnabled(connected);
+    if (m_btnEstop2Recover) m_btnEstop2Recover->setEnabled(connected);
 }
 
 void MainWindow::connectToPlc() {
     QString host = m_hostEdit->text().trimmed();
     int port = m_portEdit->text().toInt();
-    if (m_connModeCombo->currentData().toInt() == 0)
-        m_client.connectToPlc(host, static_cast<quint16>(port));
-    else
-        m_client.connectToTcsService(host, static_cast<quint16>(port));
+    m_client.connectToBackend(host, static_cast<quint16>(port));
     updateControlsForConnectionMode();
     m_pollTimer.start(200);
     m_chartTimer.start();

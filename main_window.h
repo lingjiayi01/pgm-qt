@@ -43,7 +43,6 @@ private slots:
     void recoverEstop2();
     void requestTcsSnapshot() { m_client.requestSnapshot(); }
     void sendTcsPing()        { m_client.sendPing(); }
-    void onConnModeChanged(int index);
 
 private:
     void buildUi();
@@ -82,7 +81,6 @@ private:
 
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;
-    QComboBox *m_connModeCombo = nullptr;
     QLabel *m_connStatusLamp = nullptr;
     QLabel *m_connStatusLabel = nullptr;
 
@@ -107,7 +105,6 @@ private:
     QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
     QPushButton *m_btnReset = nullptr, *m_btnEstop = nullptr, *m_btnBrakesClose = nullptr;
     QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstop2Recover = nullptr;
-    QPushButton *m_btnTcsSnapshot = nullptr, *m_btnTcsPing = nullptr;
 
     QChart *m_chart = nullptr;
     QLineSeries *m_angleSeries = nullptr;

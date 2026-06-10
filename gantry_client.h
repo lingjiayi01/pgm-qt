@@ -1,15 +1,10 @@
 #pragma once
 #include "gantry_data.h"
-#include <QtCore>
 #include <QtNetwork>
-#include <QModbusTcpClient>
-#include <QModbusDataUnit>
-#include <memory>
+#include <functional>
 
 // ============================================================================
-// GantryClient — 双协议通信客户端
-//   1. Modbus TCP 直连 PLC (默认 192.168.10.1:510)
-//   2. TCS JSON 行协议 (PGM tcs-serve, 默认 5510)
+// GantryClient — HTTP REST 客户端（连 PGM gantry_api.py）
 // ============================================================================
 
 class GantryClient : public QObject {
@@ -18,13 +13,9 @@ public:
     explicit GantryClient(QObject *parent = nullptr);
     ~GantryClient() override;
 
-    // 连接管理
-    void connectToPlc(const QString &host = "192.168.10.1", quint16 port = 510);
-    void connectToTcsService(const QString &host = "127.0.0.1", quint16 port = 5510);
+    void connectToBackend(const QString &host = "127.0.0.1", quint16 port = 8080);
     void disconnect();
-    bool isConnected() const;
-    bool isModbusMode() const { return m_mode == ConnMode::Modbus; }
-    bool isTcsMode() const { return m_mode == ConnMode::Tcs; }
+    bool isConnected() const { return m_connected; }
     QString currentHost() const { return m_host; }
     quint16 currentPort() const { return m_port; }
 
@@ -45,11 +36,7 @@ public:
     // 查询
     void requestSnapshot();
     void sendPing();
-    void pollStatus();  // 由定时器周期性调用
-
-    // 浮点编解码 (Modbus AB-CD: 高低字互换)
-    static double decodeFloat(const uint16_t regs[2]);
-    static void encodeFloat(double value, uint16_t out[2]);
+    void pollStatus();
 
 signals:
     void connected();
@@ -60,30 +47,18 @@ signals:
     void logMessage(const QString &msg);
 
 private:
-    void onTcsReadyRead();
-    void applyTcsResponse(const TcsResponse &resp);
+    using ResponseHandler = std::function<void(const ApiResponse &)>;
+
+    void get(const QString &path, const QString &logTag, ResponseHandler handler);
+    void post(const QString &path, const QJsonObject &body,
+              const QString &logTag, ResponseHandler handler);
+    void applyStatusData(const QJsonObject &data);
     void emitLog(const QString &msg);
-    void buildStatusFromPartial();
+    void markDisconnected(const QString &reason = QString());
 
-    enum class ConnMode { None, Modbus, Tcs };
-    ConnMode m_mode = ConnMode::None;
-
-    // Modbus
-    QModbusTcpClient *m_modbusClient = nullptr;
-    // TCS
-    QTcpSocket *m_tcsSocket = nullptr;
-    QByteArray m_tcsReadBuffer;
-
+    QNetworkAccessManager *m_nam = nullptr;
+    QString m_baseUrl;
     QString m_host;
-    quint16 m_port = 510;
-    quint8 m_unitId = 1;
-    int m_requestIdCounter = 0;
-
-    // 缓存的部分数据 (等待三路读全部返回后拼装)
-    std::vector<bool> m_discreteBits;
-    std::vector<uint16_t> m_inputRegs;
-    std::vector<uint16_t> m_holdingRegs;
-    bool m_discreteValid = false;
-    bool m_inputRegsValid = false;
-    bool m_holdingRegsValid = false;
+    quint16 m_port = 8080;
+    bool m_connected = false;
 };

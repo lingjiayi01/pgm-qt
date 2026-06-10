@@ -13,7 +13,6 @@ find_package(Qt6 REQUIRED COMPONENTS
     Widgets
     Network
     Charts
-    SerialBus
 )
 
 set(SOURCES
@@ -37,7 +36,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Charts
-    Qt6::SerialBus
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
