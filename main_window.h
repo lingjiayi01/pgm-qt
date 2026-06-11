@@ -41,8 +41,6 @@ private slots:
     void closeBrakes()   { m_client.closeAllBrakes(); }
     void openBrakes();
     void recoverEstop2();
-    void requestTcsSnapshot() { m_client.requestSnapshot(); }
-    void sendTcsPing()        { m_client.sendPing(); }
 
 private:
     void buildUi();

@@ -54,3 +54,6 @@ Thumbs.db
 .vscode/
 *.suo
 *.vcxproj*
+
+#测试使用
+fake_api.py
