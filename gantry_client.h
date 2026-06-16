@@ -31,12 +31,16 @@ public:
     void stopManualMotion();
     void closeAllBrakes();
     void openAllBrakes();
-    void recoverEstop2();
+    void recoverEstop(int channel = 2);
+    void runSelfTest();
+    void runWorkflowFull(const QList<double> &angles, double speed = 5.0,
+                         double tol = 0.5, double timeout = 300.0);
 
     // 查询
     void requestSnapshot();
     void sendPing();
     void pollStatus();
+    bool isMotionInProgress() const { return m_motionInProgress; }
 
 signals:
     void connected();
@@ -45,6 +49,7 @@ signals:
     void commandResponse(const TcsResponse &resp);
     void communicationError(const QString &error);
     void logMessage(const QString &msg);
+    void motionFinished();
 
 private:
     using ResponseHandler = std::function<void(const ApiResponse &)>;
@@ -61,4 +66,7 @@ private:
     QString m_host;
     quint16 m_port = 8080;
     bool m_connected = false;
+    int m_consecutivePollFailures = 0;
+    bool m_motionInProgress = false;
+    void setMotionInProgress(bool busy);
 };

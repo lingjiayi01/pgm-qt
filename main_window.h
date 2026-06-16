@@ -10,7 +10,7 @@
 #include <QDateTimeAxis>
 #include <QValueAxis>
 #include <QChartView>
-#include <vector>
+#include <deque>
 
 // ============================================================================
 // MainWindow — PGM 旋转机架 Qt6 主控制界面
@@ -31,7 +31,7 @@ private slots:
     void disconnectFromPlc();
     void setAutoMode()   { m_client.setAutoMode(); }
     void setManualMode() { m_client.setManualMode(); }
-    void startHoming()   { m_client.startHoming(); }
+    void startHoming();
     void resetFault()    { m_client.resetFault(); }
     void emergencyStop();
     void jogFwd();
@@ -40,7 +40,11 @@ private slots:
     void stopManual()    { m_client.stopManualMotion(); }
     void closeBrakes()   { m_client.closeAllBrakes(); }
     void openBrakes();
-    void recoverEstop2();
+    void recoverEstop();
+    void runSelfTest();
+    void runWorkflowFull();
+    void exportChartPng();
+    void exportChartCsv();
 
 private:
     void buildUi();
@@ -73,6 +77,8 @@ private:
     void updateParameterDisplay(const GantryStatus &s);
     void updateChart(double angle);
     void updateControlsForConnectionMode();
+    void setMotionButtonsEnabled(bool enabled);
+    int chartWindowSeconds() const;
 
     GantryClient m_client;
     QTimer m_pollTimer;
@@ -98,18 +104,26 @@ private:
 
     QDoubleSpinBox *m_targetAngleSpin = nullptr, *m_targetSpeedSpin = nullptr;
     QDoubleSpinBox *m_jogSpeedSpin = nullptr, *m_jogSecondsSpin = nullptr;
+    QDoubleSpinBox *m_timeoutSpin = nullptr;
 
     QWidget *m_motionModbusBlock = nullptr;
     QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
     QPushButton *m_btnReset = nullptr, *m_btnEstop = nullptr, *m_btnBrakesClose = nullptr;
-    QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstop2Recover = nullptr;
+    QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstopRecover = nullptr;
+    QPushButton *m_btnSelfTest = nullptr, *m_btnWorkflow = nullptr;
+    QPushButton *m_btnMove = nullptr;
+    bool m_motionBusy = false;
 
     QChart *m_chart = nullptr;
+    QChartView *m_chartView = nullptr;
     QLineSeries *m_angleSeries = nullptr;
     QScatterSeries *m_targetScatter = nullptr;
     QDateTimeAxis *m_timeAxis = nullptr;
     QValueAxis *m_angleAxis = nullptr;
     QElapsedTimer m_chartTimer;
+    QComboBox *m_chartWindowCombo = nullptr;
+    static constexpr int kMaxChartPoints = 1500;
+    static constexpr int kParamNameColWidth = 88;
 
     QTableWidget *m_logTable = nullptr;
     int m_lastHighlightRow = -1;

@@ -1,7 +1,7 @@
 #pragma once
 #include <QtWidgets>
 #include <cmath>
-#include <vector>
+#include <deque>
 
 // ============================================================================
 // GaugeWidget — 弧形仪表盘控件 (汽车仪表盘风格)
@@ -27,12 +27,12 @@ public:
         emit angleChanged(m_angle);
         // 历史缓存 (最多 100 点)
         m_history.push_back(deg);
-        if (m_history.size() > 100) m_history.erase(m_history.begin());
+        if (m_history.size() > 100) m_history.pop_front();
     }
     void setTargetAngle(double deg) { m_targetAngle = deg; update(); }
     void setTitle(const QString &t) { m_title = t; update(); }
 
-    const std::vector<double> &history() const { return m_history; }
+    const std::deque<double> &history() const { return m_history; }
     void clearHistory() { m_history.clear(); update(); }
 
 signals:
@@ -166,5 +166,5 @@ private:
     QString m_title = "机架角度";
     const double m_startRad = 3.14159 * 0.75;   // 135° (左下)
     const double m_spanRad  = 3.14159 * 1.5;    // 270° 跨域
-    std::vector<double> m_history;
+    std::deque<double> m_history;
 };

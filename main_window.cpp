@@ -1,4 +1,10 @@
 #include "main_window.h"
+#include <QStringConverter>
+#include <QInputDialog>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QFile>
+#include <QTextStream>
 #include <algorithm>
 #include <cmath>
 
@@ -14,7 +20,6 @@ constexpr int kRightPanelMaxWidth = 400;
 constexpr int kRightGroupSpacing = 8;
 constexpr int kMotionLayerSpacing = 8;
 constexpr int kSafetyBtnHeight = 32;
-constexpr int kParamNameColWidth = 76;
 constexpr int kParamValueColWidth = 80;
 constexpr int kGaugeMinSize = 200;
 
@@ -134,6 +139,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
         m_connStatusLabel->setText("已连接 (HTTP)");
         m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
+        m_pollTimer.start(200);
         updateControlsForConnectionMode();
         onLogMessage("=== 已连接 ===");
     });
@@ -157,6 +163,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onConnectionError);
     connect(&m_pollTimer, &QTimer::timeout, this, [this]() {
         m_client.pollStatus();
+    });
+
+    connect(&m_client, &GantryClient::motionFinished, this, [this]() {
+        m_motionBusy = false;
+        setMotionButtonsEnabled(true);
     });
 
     m_chartTimer.start();
@@ -197,6 +208,9 @@ void MainWindow::buildUi() {
     bottom->addWidget(buildChartPanel(), 1);
     bottom->addWidget(buildLogPanel(), 1);
     root->addLayout(bottom, 2);
+
+    // 所有控件构建完成后统一设置初始状态
+    updateControlsForConnectionMode();
 }
 
 // ============================================================================
@@ -372,18 +386,18 @@ QWidget *MainWindow::buildParametersPanel() {
     grid->setColumnMinimumWidth(2, kParamNameColWidth);
     grid->setColumnMinimumWidth(3, kParamValueColWidth);
 
-    addParamCell(grid, 0, 0, "伺服角",   m_labelServoAngle);
-    addParamCell(grid, 0, 2, "ABS_01",   m_labelAbs01Angle);
-    addParamCell(grid, 1, 0, "ABS_02",   m_labelAbs02Angle);
-    addParamCell(grid, 1, 2, "速度",     m_labelCurrentSpeed);
-    addParamCell(grid, 2, 0, "位给定",   m_labelPositionSetpoint);
-    addParamCell(grid, 2, 2, "速给定",   m_labelSpeedSetpoint);
-    addParamCell(grid, 3, 0, "扭矩1",    m_labelServo1Torque);
-    addParamCell(grid, 3, 2, "扭矩2",    m_labelServo2Torque);
-    addParamCell(grid, 4, 0, "串动1",    m_labelSlip1);
-    addParamCell(grid, 4, 2, "串动2",    m_labelSlip2);
-    addParamCell(grid, 5, 0, "剪切力",   m_labelShearForce);
-    addParamCell(grid, 5, 2, "过冲",     m_labelEstopOvershoot);
+    addParamCell(grid, 0, 0, "\u4F3A\u670D\u89D2(\u00B0)",   m_labelServoAngle);
+    addParamCell(grid, 0, 2, "ABS_01(\u00B0)",   m_labelAbs01Angle);
+    addParamCell(grid, 1, 0, "ABS_02(\u00B0)",   m_labelAbs02Angle);
+    addParamCell(grid, 1, 2, "\u901F\u5EA6(\u00B0/s)",     m_labelCurrentSpeed);
+    addParamCell(grid, 2, 0, "\u4F4D\u7ED9\u5B9A(\u00B0)",   m_labelPositionSetpoint);
+    addParamCell(grid, 2, 2, "\u901F\u7ED9\u5B9A(\u00B0/s)", m_labelSpeedSetpoint);
+    addParamCell(grid, 3, 0, "\u626D\u77E91(Nm)",    m_labelServo1Torque);
+    addParamCell(grid, 3, 2, "\u626D\u77E92(Nm)",    m_labelServo2Torque);
+    addParamCell(grid, 4, 0, "\u4E32\u52A81(mm)",    m_labelSlip1);
+    addParamCell(grid, 4, 2, "\u4E32\u52A82(mm)",    m_labelSlip2);
+    addParamCell(grid, 5, 0, "\u526A\u5207\u529B(N)",   m_labelShearForce);
+    addParamCell(grid, 5, 2, "\u8FC7\u51B2(\u00B0)",     m_labelEstopOvershoot);
 
     gb->setMaximumWidth(kParamNameColWidth * 2 + kParamValueColWidth * 2 + 24);
     gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
@@ -554,17 +568,40 @@ QWidget *MainWindow::buildMotionPanel() {
     posInputRow->addWidget(m_targetAngleSpin, 1);
     posInputRow->addWidget(spdLb);
     posInputRow->addWidget(m_targetSpeedSpin, 1);
+    auto *toLb = new QLabel("\u8D85\u65F6");
+    toLb->setFixedWidth(32);
+    m_timeoutSpin = new QDoubleSpinBox;
+    m_timeoutSpin->setRange(10.0, 600.0);
+    m_timeoutSpin->setValue(300.0);
+    m_timeoutSpin->setSuffix(" s");
+    m_timeoutSpin->setDecimals(0);
+    m_timeoutSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    posInputRow->addWidget(toLb);
+    posInputRow->addWidget(m_timeoutSpin, 1);
     v->addLayout(posInputRow);
 
-    auto *btnMove = new QPushButton("执行定位");
+    auto *btnMove = new QPushButton("\u6267\u884C\u5B9A\u4F4D");
     btnMove->setObjectName("btnMove");
     connect(btnMove, &QPushButton::clicked, this, &MainWindow::moveToPosition);
     styleUniformButtons({btnMove}, 0);
+    m_btnMove = btnMove;
     v->addWidget(btnMove);
+    
+    // ④ 工作流按钮行：自检 + 完整工作流
+    auto *wfRow = new QHBoxLayout;
+    wfRow->setSpacing(kLayoutSpacing);
+    m_btnSelfTest = new QPushButton("\u4E0A\u7535\u81EA\u68C0");
+    connect(m_btnSelfTest, &QPushButton::clicked, this, &MainWindow::runSelfTest);
+    m_btnWorkflow = new QPushButton("\u5B8C\u6574\u5DE5\u4F5C\u6D41");
+    connect(m_btnWorkflow, &QPushButton::clicked, this, &MainWindow::runWorkflowFull);
+    styleUniformButtons({m_btnSelfTest, m_btnWorkflow}, 0);
+    wfRow->addWidget(m_btnSelfTest, 1);
+    wfRow->addWidget(m_btnWorkflow, 1);
+    v->addLayout(wfRow);
+    
     v->addStretch(1);
-
+    
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    updateControlsForConnectionMode();
     return gb;
 }
 
@@ -584,11 +621,11 @@ QWidget *MainWindow::buildSafetyPanel() {
     m_btnBrakesOpen = new QPushButton("打开制动");
     connect(m_btnBrakesOpen, &QPushButton::clicked, this, &MainWindow::openBrakes);
 
-    m_btnEstop2Recover = new QPushButton("急停2恢复");
-    m_btnEstop2Recover->setToolTip("松开急停2后复位");
-    connect(m_btnEstop2Recover, &QPushButton::clicked, this, &MainWindow::recoverEstop2);
+    m_btnEstopRecover = new QPushButton(QStringLiteral("\u6025\u505C\u6062\u590D"));
+    m_btnEstopRecover->setToolTip(QStringLiteral("\u663E\u793A\u5F53\u524D\u6025\u505C\u72B6\u6001\u5E76\u63D0\u4F9B\u6062\u590D\u64CD\u4F5C"));
+    connect(m_btnEstopRecover, &QPushButton::clicked, this, &MainWindow::recoverEstop);
 
-    styleSafetyButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstop2Recover});
+    styleSafetyButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstopRecover});
 
     v->addStretch(1);
     v->addWidget(m_btnEstop);
@@ -597,7 +634,7 @@ QWidget *MainWindow::buildSafetyPanel() {
     v->addStretch(1);
     v->addWidget(m_btnBrakesOpen);
     v->addStretch(1);
-    v->addWidget(m_btnEstop2Recover);
+    v->addWidget(m_btnEstopRecover);
     v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -650,10 +687,32 @@ QWidget *MainWindow::buildChartPanel() {
     m_angleSeries->attachAxis(m_angleAxis);
     m_targetScatter->attachAxis(m_angleAxis);
 
-    auto *cv = new QChartView(m_chart);
-    cv->setRenderHint(QPainter::Antialiasing);
-    cv->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    l->addWidget(cv);
+    m_chartView = new QChartView(m_chart);
+    m_chartView->setRenderHint(QPainter::Antialiasing);
+    m_chartView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    l->addWidget(m_chartView);
+
+    // 时间窗口选择 + 导出按钮
+    auto *chartBar = new QHBoxLayout;
+    chartBar->setSpacing(kLayoutSpacing);
+    auto *winLb = new QLabel(QStringLiteral("\u7A97\u53E3"));
+    winLb->setFixedWidth(28);
+    m_chartWindowCombo = new QComboBox;
+    m_chartWindowCombo->addItems({QStringLiteral("30s"), QStringLiteral("1min"),
+                                  QStringLiteral("2min"), QStringLiteral("5min")});
+    m_chartWindowCombo->setFixedWidth(64);
+    auto *btnPng = new QPushButton(QStringLiteral("\u622A\u56FE"));
+    btnPng->setFixedWidth(kBtnMinWidth);
+    connect(btnPng, &QPushButton::clicked, this, &MainWindow::exportChartPng);
+    auto *btnCsv = new QPushButton(QStringLiteral("CSV"));
+    btnCsv->setFixedWidth(kBtnMinWidth);
+    connect(btnCsv, &QPushButton::clicked, this, &MainWindow::exportChartCsv);
+    chartBar->addWidget(winLb);
+    chartBar->addWidget(m_chartWindowCombo);
+    chartBar->addStretch(1);
+    chartBar->addWidget(btnPng);
+    chartBar->addWidget(btnCsv);
+    l->addLayout(chartBar);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return gb;
@@ -825,7 +884,15 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
     setLedColor(m_ledBeamPermit,    bp);
     m_ledBeamPermit.text->setText(
         bp ? kBeamPermitLedLabel
-           : QStringLiteral("可出束[软件占位](%1)").arg(bpr));
+           : QStringLiteral("\u53EF\u51FA\u675F[\u8F6F\u4EF6\u5360\u4F4D](%1)").arg(bpr));
+    // \u5B8C\u6574\u539F\u56E0\u5199\u5165 tooltip\uFF0C\u907F\u514D LED \u6807\u7B7E\u6EA2\u51FA\u622A\u65AD
+    if (!bp && !bpr.isEmpty()) {
+        m_ledBeamPermit.text->setToolTip(bpr);
+        m_ledBeamPermit.dot->setToolTip(bpr);
+    } else {
+        m_ledBeamPermit.text->setToolTip(kBeamPermitLedTooltip);
+        m_ledBeamPermit.dot->setToolTip(kBeamPermitLedTooltip);
+    }
 }
 
 void MainWindow::resetAllLeds() {
@@ -883,6 +950,9 @@ void MainWindow::updateChart(double angle) {
     const double y = ModbusFloat::sanitizeAbsAngle(angle);
     QDateTime now = QDateTime::currentDateTime();
     m_angleSeries->append(now.toMSecsSinceEpoch(), y);
+    // 曲线数据上限裁剪，避免长时间运行内存泄漏
+    while (m_angleSeries->count() > kMaxChartPoints)
+        m_angleSeries->remove(0);
     if (ModbusFloat::isDisplayableAngle(m_currentStatus.positionSetpoint)) {
         m_targetScatter->clear();
         m_targetScatter->append(now.toMSecsSinceEpoch(),
@@ -890,7 +960,7 @@ void MainWindow::updateChart(double angle) {
     } else {
         m_targetScatter->clear();
     }
-    m_timeAxis->setRange(now.addSecs(-30), now);
+    m_timeAxis->setRange(now.addSecs(-chartWindowSeconds()), now);
     m_angleAxis->setRange(ModbusAddr::CHART_ANGLE_AXIS_MIN,
                           ModbusAddr::CHART_ANGLE_AXIS_MAX);
 }
@@ -920,23 +990,37 @@ void MainWindow::onConnectionError(const QString &err) { onLogMessage("通信错
 void MainWindow::updateControlsForConnectionMode() {
     const bool connected = m_client.isConnected();
 
-    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(connected);
+    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(connected && !m_motionBusy);
     if (m_btnAuto) m_btnAuto->setEnabled(connected);
     if (m_btnManual) m_btnManual->setEnabled(connected);
-    if (m_btnHome) m_btnHome->setEnabled(connected);
+    if (m_btnHome) m_btnHome->setEnabled(connected && !m_motionBusy);
     if (m_btnReset) m_btnReset->setEnabled(connected);
     if (m_btnEstop) m_btnEstop->setEnabled(connected);
     if (m_btnBrakesClose) m_btnBrakesClose->setEnabled(connected);
     if (m_btnBrakesOpen) m_btnBrakesOpen->setEnabled(connected);
-    if (m_btnEstop2Recover) m_btnEstop2Recover->setEnabled(connected);
+    if (m_btnEstopRecover) m_btnEstopRecover->setEnabled(connected);
+    if (m_btnSelfTest) m_btnSelfTest->setEnabled(connected && !m_motionBusy);
+    if (m_btnWorkflow) m_btnWorkflow->setEnabled(connected && !m_motionBusy);
+    if (m_btnMove) m_btnMove->setEnabled(connected && !m_motionBusy);
 }
 
 void MainWindow::connectToPlc() {
+    m_pollTimer.stop();
     QString host = m_hostEdit->text().trimmed();
-    int port = m_portEdit->text().toInt();
+    if (host.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("\u53C2\u6570\u9519\u8BEF"),
+            QStringLiteral("\u4E3B\u673A\u5730\u5740\u4E0D\u80FD\u4E3A\u7A7A\u3002"));
+        return;
+    }
+    bool ok = false;
+    int port = m_portEdit->text().toInt(&ok);
+    if (!ok || port <= 0 || port > 65535) {
+        QMessageBox::warning(this, QStringLiteral("\u53C2\u6570\u9519\u8BEF"),
+            QStringLiteral("\u7AEF\u53E3\u53F7\u65E0\u6548\uFF0C\u8BF7\u8F93\u5165 1~65535 \u4E4B\u95F4\u7684\u6574\u6570\u3002"));
+        return;
+    }
     m_client.connectToBackend(host, static_cast<quint16>(port));
-    updateControlsForConnectionMode();
-    m_pollTimer.start(200);
+    // \u8F6E\u8BE2\u5B9A\u65F6\u5668\u5728 connected \u4FE1\u53F7\u4E2D\u542F\u52A8\uFF0C\u907F\u514D\u8FDE\u63A5\u672A\u5B8C\u6210\u524D\u7A7A\u8F6E\u8BE2
     m_chartTimer.start();
 }
 
@@ -948,17 +1032,51 @@ void MainWindow::disconnectFromPlc() {
 }
 
 void MainWindow::openBrakes() {
-    if (QMessageBox::warning(this, "确认",
-            "确定要打开全部制动器吗？仅用于维护/调试。",
+    QString angleInfo = m_currentStatus.abs01AngleDeg.has_value()
+        ? QStringLiteral("\u5F53\u524D\u89D2\u5EA6: %1\u00B0").arg(*m_currentStatus.abs01AngleDeg, 0, 'f', 2)
+        : QStringLiteral("\u5F53\u524D\u89D2\u5EA6: \u672A\u77E5");
+    QString motionInfo = m_currentStatus.motorRunning
+        ? QStringLiteral("\u7535\u673A\u8FD0\u884C\u4E2D!") : QStringLiteral("\u7535\u673A\u672A\u8FD0\u884C");
+    if (QMessageBox::warning(this, QStringLiteral("\u786E\u8BA4"),
+            QStringLiteral("\u786E\u5B9A\u8981\u6253\u5F00\u5168\u90E8\u5236\u52A8\u5668\u5417\uFF1F\u4EC5\u7528\u4E8E\u7EF4\u62A4/\u8C03\u8BD5\u3002\n%1\n%2")
+                .arg(angleInfo, motionInfo),
             QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes)
         m_client.openAllBrakes();
 }
 
-void MainWindow::recoverEstop2() {
-    if (QMessageBox::information(this, "急停2恢复",
-            "请先松开旋转急停2 (DI 00035=0)，再确认发送故障复位脉冲。",
-            QMessageBox::Ok | QMessageBox::Cancel) == QMessageBox::Ok)
-        m_client.recoverEstop2();
+void MainWindow::recoverEstop() {
+    // 显示当前急停状态并提供恢复操作
+    QString status;
+    if (m_currentStatus.plcEstop) status += QStringLiteral("PLC柜急停(00033) ");
+    if (m_currentStatus.estop1)   status += QStringLiteral("急停1(00034) ");
+    if (m_currentStatus.estop2)   status += QStringLiteral("急停2(00035) ");
+    if (m_currentStatus.estop3)   status += QStringLiteral("急停3(00036) ");
+    if (status.isEmpty()) status = QStringLiteral("无急停触发");
+
+    QString msg = QStringLiteral("当前急停状态: %1\n\n"
+                   "急停2恢复: 请先松开旋转急停2，再点击「急停2恢复」。\n"
+                   "其它急停通道: 请先松开对应物理急停按钮，再点击「故障复位」。")
+                   .arg(status);
+
+    QMessageBox dlg(this);
+    dlg.setWindowTitle(QStringLiteral("急停恢复"));
+    dlg.setText(msg);
+    auto *btnEstop2 = dlg.addButton(QStringLiteral("急停2恢复"), QMessageBox::ActionRole);
+    auto *btnReset = dlg.addButton(QStringLiteral("故障复位"), QMessageBox::ActionRole);
+    dlg.addButton(QMessageBox::Cancel);
+    dlg.exec();
+
+    if (dlg.clickedButton() == btnEstop2)
+        m_client.recoverEstop(2);
+    else if (dlg.clickedButton() == btnReset)
+        m_client.resetFault();
+}
+
+void MainWindow::startHoming() {
+    if (m_motionBusy) return;
+    m_motionBusy = true;
+    setMotionButtonsEnabled(false);
+    m_client.startHoming();
 }
 
 void MainWindow::emergencyStop() {
@@ -968,11 +1086,109 @@ void MainWindow::emergencyStop() {
 }
 
 void MainWindow::jogFwd() {
+    if (m_motionBusy) return;
+    m_motionBusy = true;
+    setMotionButtonsEnabled(false);
     m_client.manualJog(true, m_jogSpeedSpin->value(), m_jogSecondsSpin->value());
 }
 void MainWindow::jogRev() {
+    if (m_motionBusy) return;
+    m_motionBusy = true;
+    setMotionButtonsEnabled(false);
     m_client.manualJog(false, m_jogSpeedSpin->value(), m_jogSecondsSpin->value());
 }
 void MainWindow::moveToPosition() {
-    m_client.moveToPosition(m_targetAngleSpin->value(), m_targetSpeedSpin->value(), 300.0);
+    if (m_motionBusy) return;
+    m_motionBusy = true;
+    setMotionButtonsEnabled(false);
+    m_client.moveToPosition(m_targetAngleSpin->value(), m_targetSpeedSpin->value(),
+                           m_timeoutSpin ? m_timeoutSpin->value() : 300.0);
+}
+
+// ============================================================================
+// 辅助方法
+// ============================================================================
+
+void MainWindow::setMotionButtonsEnabled(bool enabled) {
+    updateControlsForConnectionMode();
+}
+
+int MainWindow::chartWindowSeconds() const {
+    if (!m_chartWindowCombo) return 30;
+    switch (m_chartWindowCombo->currentIndex()) {
+    case 1:  return 60;
+    case 2:  return 120;
+    case 3:  return 300;
+    default: return 30;
+    }
+}
+
+void MainWindow::runSelfTest() {
+    if (m_motionBusy) return;
+    m_client.runSelfTest();
+}
+
+void MainWindow::runWorkflowFull() {
+    if (m_motionBusy) return;
+    // 弹出对话框输入角度序列
+    bool ok = false;
+    QString text = QInputDialog::getMultiLineText(this,
+        QStringLiteral("完整工作流"),
+        QStringLiteral("输入目标角度序列（每行一个角度，单位°）："),
+        QStringLiteral("0.0\n45.0\n90.0"),
+        &ok);
+    if (!ok || text.trimmed().isEmpty()) return;
+
+    QList<double> angles;
+    for (const auto &line : text.split('\n', Qt::SkipEmptyParts)) {
+        bool convOk = false;
+        double val = line.trimmed().toDouble(&convOk);
+        if (convOk && std::abs(val) <= 185.0)
+            angles.append(val);
+    }
+    if (angles.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("输入错误"),
+            QStringLiteral("未解析到有效角度值。"));
+        return;
+    }
+    m_motionBusy = true;
+    setMotionButtonsEnabled(false);
+    m_client.runWorkflowFull(angles);
+}
+
+void MainWindow::exportChartPng() {
+    if (!m_chart) return;
+    QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("导出曲线截图"),
+        QStringLiteral("gantry_chart.png"),
+        QStringLiteral("PNG (*.png);;All Files (*)"));
+    if (path.isEmpty()) return;
+    QPixmap pix = m_chartView->grab();
+    pix.save(path, "PNG");
+    onLogMessage(QStringLiteral("曲线截图已保存: %1").arg(path));
+}
+
+void MainWindow::exportChartCsv() {
+    if (!m_angleSeries) return;
+    QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("导出曲线 CSV"),
+        QStringLiteral("gantry_chart.csv"),
+        QStringLiteral("CSV (*.csv);;All Files (*)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+            QStringLiteral("无法写入文件: %1").arg(path));
+        return;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    out << QStringLiteral("timestamp_ms,angle_deg\n");
+    for (int i = 0; i < m_angleSeries->count(); ++i) {
+        const auto &pt = m_angleSeries->at(i);
+        out << QStringLiteral("%1,%2\n").arg(pt.x(), 0, 'f', 0).arg(pt.y(), 0, 'f', 4);
+    }
+    file.close();
+    onLogMessage(QStringLiteral("曲线 CSV 已保存: %1 (%2 点)")
+        .arg(path).arg(m_angleSeries->count()));
 }

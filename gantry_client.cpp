@@ -8,6 +8,7 @@ namespace {
 constexpr int kConnectTimeoutMs = 5000;
 constexpr int kPollTimeoutMs = 4000;
 constexpr int kMotionTimeoutMs = 600000;
+constexpr int kMaxConsecutiveFailures = 3;
 }
 
 // ============================================================================
@@ -42,11 +43,17 @@ void GantryClient::get(const QString &path, const QString &logTag,
         if (reply->error() != QNetworkReply::NoError && body.isEmpty()) {
             const QString err = QString("%1: %2").arg(logTag, reply->errorString());
             emitLog(err);
-            if (m_connected && reply->error() != QNetworkReply::OperationCanceledError)
+            if (m_connected && reply->error() != QNetworkReply::OperationCanceledError) {
+                ++m_consecutivePollFailures;
                 emit communicationError(err);
+                if (m_consecutivePollFailures >= kMaxConsecutiveFailures)
+                    markDisconnected(QStringLiteral("连续 %1 次通信失败，判定断线")
+                                     .arg(m_consecutivePollFailures));
+            }
             reply->deleteLater();
             return;
         }
+        m_consecutivePollFailures = 0;
         emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
         if (!api.ok && !api.error.isEmpty())
             emitLog(QString("  错误: %1 [%2]").arg(api.error, api.errorCode));
@@ -192,9 +199,19 @@ void GantryClient::setManualMode() {
          QStringLiteral("手动模式"), nullptr);
 }
 
+void GantryClient::setMotionInProgress(bool busy) {
+    if (m_motionInProgress == busy) return;
+    m_motionInProgress = busy;
+    if (!busy)
+        emit motionFinished();
+}
+
 void GantryClient::startHoming() {
+    setMotionInProgress(true);
     post(QStringLiteral("/api/v1/motion/home"), QJsonObject(),
-         QStringLiteral("寻零"), nullptr);
+         QStringLiteral("寻零"), [this](const ApiResponse &) {
+             setMotionInProgress(false);
+         });
 }
 
 void GantryClient::startPositionMode() {
@@ -216,8 +233,11 @@ void GantryClient::manualJog(bool forward, double speed, double seconds) {
     body[QStringLiteral("forward")] = forward;
     body[QStringLiteral("speed")] = speed;
     body[QStringLiteral("seconds")] = seconds;
+    setMotionInProgress(true);
     post(QStringLiteral("/api/v1/motion/jog"), body,
-         QStringLiteral("点动"), nullptr);
+         QStringLiteral("点动"), [this](const ApiResponse &) {
+             setMotionInProgress(false);
+         });
 }
 
 void GantryClient::moveToPosition(double angleDeg, double speed, double timeoutSec) {
@@ -225,8 +245,10 @@ void GantryClient::moveToPosition(double angleDeg, double speed, double timeoutS
     body[QStringLiteral("angle")] = angleDeg;
     body[QStringLiteral("speed")] = speed;
     body[QStringLiteral("timeout")] = timeoutSec;
+    setMotionInProgress(true);
     post(QStringLiteral("/api/v1/motion/position"), body,
          QStringLiteral("定角运动"), [this](const ApiResponse &api) {
+             setMotionInProgress(false);
              if (api.ok)
                  applyStatusData(api.data);
          });
@@ -249,7 +271,35 @@ void GantryClient::openAllBrakes() {
          QStringLiteral("打开制动"), nullptr);
 }
 
-void GantryClient::recoverEstop2() {
-    post(QStringLiteral("/api/v1/safety/estop2-recover"), QJsonObject(),
-         QStringLiteral("急停2恢复"), nullptr);
+void GantryClient::recoverEstop(int channel) {
+    if (channel == 2) {
+        post(QStringLiteral("/api/v1/safety/estop2-recover"), QJsonObject(),
+             QStringLiteral("急停恢复"), nullptr);
+    } else {
+        // 其它通道暂无专用 API，先发故障复位作为替代
+        emitLog(QStringLiteral("急停%1恢复: 先发故障复位脉冲").arg(channel));
+        post(QStringLiteral("/api/v1/safety/reset"), QJsonObject(),
+             QStringLiteral("故障复位(急停恢复)"), nullptr);
+    }
+}
+
+void GantryClient::runSelfTest() {
+    post(QStringLiteral("/api/v1/workflow/self-test"), QJsonObject(),
+         QStringLiteral("上电自检"), nullptr);
+}
+
+void GantryClient::runWorkflowFull(const QList<double> &angles, double speed,
+                                     double tol, double timeout) {
+    QJsonObject body;
+    QJsonArray arr;
+    for (double a : angles) arr.append(a);
+    body[QStringLiteral("angles")] = arr;
+    body[QStringLiteral("speed")] = speed;
+    body[QStringLiteral("tol")] = tol;
+    body[QStringLiteral("timeout")] = timeout;
+    setMotionInProgress(true);
+    post(QStringLiteral("/api/v1/workflow/full"), body,
+         QStringLiteral("完整工作流"), [this](const ApiResponse &) {
+             setMotionInProgress(false);
+         });
 }
