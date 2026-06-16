@@ -17,6 +17,13 @@ constexpr int kSafetyBtnHeight = 32;
 constexpr int kParamNameColWidth = 76;
 constexpr int kParamValueColWidth = 80;
 constexpr int kGaugeMinSize = 200;
+
+constexpr int kStatusPanelMaxWidth = 172;
+
+const QString kBeamPermitLedLabel = QStringLiteral("可出束[软件占位]");
+const QString kBeamPermitLedTooltip = QStringLiteral(
+    "PGM 软件占位预判（beam_permit_placeholder），仅供监视参考。\n"
+    "最终出束许可由 TCS 治疗控制系统决定；本指示灯亮≠允许临床出束。");
 }
 
 // ============================================================================
@@ -278,7 +285,8 @@ QWidget *MainWindow::buildStatusPanel() {
     v->setSpacing(2);
     v->setContentsMargins(4, 8, 4, 4);
 
-    auto addLedRow = [&](LedItem &item, const QString &label) {
+    auto addLedRow = [&](LedItem &item, const QString &label,
+                          const QString &tooltip = QString()) {
         item = makeLed(label);
         auto *row = new QWidget;
         auto *hl = new QHBoxLayout(row);
@@ -287,6 +295,11 @@ QWidget *MainWindow::buildStatusPanel() {
         hl->addWidget(item.dot, 0, Qt::AlignVCenter);
         hl->addWidget(item.text, 1, Qt::AlignVCenter);
         item.text->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+        if (!tooltip.isEmpty()) {
+            row->setToolTip(tooltip);
+            item.dot->setToolTip(tooltip);
+            item.text->setToolTip(tooltip);
+        }
         v->addWidget(row);
     };
 
@@ -302,9 +315,9 @@ QWidget *MainWindow::buildStatusPanel() {
     addLedRow(m_ledAir,           "气压正常");
     addLedRow(m_ledBrakes,        "制动器关闭");
     addLedRow(m_ledMotionInhibit, "运动允许");
-    addLedRow(m_ledBeamPermit,    "可出束");
+    addLedRow(m_ledBeamPermit, kBeamPermitLedLabel, kBeamPermitLedTooltip);
 
-    gb->setMaximumWidth(148);
+    gb->setMaximumWidth(kStatusPanelMaxWidth);
     gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
     return gb;
 }
@@ -810,7 +823,9 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
     setLedColor(m_ledMotionInhibit, !s.motionInhibitEffective());
     auto [bp, bpr] = s.beamPermit();
     setLedColor(m_ledBeamPermit,    bp);
-    m_ledBeamPermit.text->setText(bp ? "可出束" : QString("可出束(%1)").arg(bpr));
+    m_ledBeamPermit.text->setText(
+        bp ? kBeamPermitLedLabel
+           : QStringLiteral("可出束[软件占位](%1)").arg(bpr));
 }
 
 void MainWindow::resetAllLeds() {
@@ -827,7 +842,7 @@ void MainWindow::resetAllLeds() {
     setLedColor(m_ledBrakes,        false);
     setLedColor(m_ledMotionInhibit, false);
     setLedColor(m_ledBeamPermit,    false);
-    m_ledBeamPermit.text->setText("可出束");
+    m_ledBeamPermit.text->setText(kBeamPermitLedLabel);
     if (m_gauge) {
         m_gauge->setAngle(0.0);
         m_gauge->setTargetAngle(std::numeric_limits<double>::quiet_NaN());
