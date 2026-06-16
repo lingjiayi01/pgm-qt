@@ -101,23 +101,40 @@ inline double round4(double v) {
     return std::round(v * 10000.0) / 10000.0;
 }
 
-inline double decodeAbCd(const uint16_t regs[2]) {
-    // 高低字互换: regs[0]=低字(CD), regs[1]=高字(AB) → 32 位大端 float
-    const quint32 be = (quint32(regs[1]) << 16) | quint32(regs[0]);
+/**
+ * Modbus IEEE754 浮点解码 — 与后端 gantry_modbus.py FloatWordOrder.BIG_BIG 一致。
+ *
+ * BIG_BIG 字序定义（后端 struct.pack(">HH", r0, r1)、struct.unpack(">f")）:
+ *   - r0 = 高字（寄存器起始地址的 uint16）
+ *   - r1 = 低字（寄存器起始地址+1 的 uint16）
+ *   - 每字内部大端（高字节在前）
+ *   - 32 位整体按大端解释为 float
+ *
+ * 本函数仅在 Qt 前端直连 PLC 的 Modbus TCP（不经过后端 HTTP API）时启用。
+ * 当前在线模式通过 REST API 获取后端已解码的 JSON 数值，不调用此函数。
+ */
+inline double decodeFloatBigBig(const uint16_t regs[2]) {
+    // regs[0]=高字, regs[1]=低字 → 拼成 32 位大端 → 转 float
+    const quint32 be = (quint32(regs[0]) << 16) | quint32(regs[1]);
     const quint32 native = qFromBigEndian(be);
     float val = 0.0f;
     std::memcpy(&val, &native, sizeof(float));
     return round4(static_cast<double>(val));
 }
 
-inline void encodeAbCd(double value, uint16_t out[2]) {
+/** BIG_BIG 浮点编码: 与解码配对，写保持寄存器时用 */
+inline void encodeFloatBigBig(double value, uint16_t out[2]) {
     float fval = static_cast<float>(value);
     quint32 native = 0;
     std::memcpy(&native, &fval, sizeof(float));
     const quint32 be = qToBigEndian(native);
-    out[0] = static_cast<uint16_t>(be & 0xFFFFu);
-    out[1] = static_cast<uint16_t>((be >> 16) & 0xFFFFu);
+    out[0] = static_cast<uint16_t>((be >> 16) & 0xFFFFu);  // 高字
+    out[1] = static_cast<uint16_t>(be & 0xFFFFu);           // 低字
 }
+
+// 保留旧函数名作为别名，避免其他文件引用处编译报错
+inline double decodeAbCd(const uint16_t regs[2]) { return decodeFloatBigBig(regs); }
+inline void   encodeAbCd(double value, uint16_t out[2]) { encodeFloatBigBig(value, out); }
 
 /** ABS01/ABS02：超出 [-185,185] 或非有限数 → 0.0 */
 inline double sanitizeAbsAngle(double v) {
