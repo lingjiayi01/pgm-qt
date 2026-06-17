@@ -139,7 +139,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
         m_connStatusLabel->setText("已连接 (HTTP)");
         m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
-        m_pollTimer.start(200);
+        m_pollTimer.start(1000);  // 状态轮询 1s 一次, 降低后端日志量
         updateControlsForConnectionMode();
         onLogMessage("=== 已连接 ===");
     });

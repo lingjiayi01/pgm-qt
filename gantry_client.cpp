@@ -35,7 +35,8 @@ void GantryClient::get(const QString &path, const QString &logTag,
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setTransferTimeout(kPollTimeoutMs);
 
-    emitLog(QString("GET %1").arg(path));
+    // 轮询请求不打日志，避免刷屏
+    // emitLog(QString("GET %1").arg(path));
     QNetworkReply *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler]() {
         const QByteArray body = reply->readAll();
@@ -54,7 +55,8 @@ void GantryClient::get(const QString &path, const QString &logTag,
             return;
         }
         m_consecutivePollFailures = 0;
-        emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
+        // 轮询返回的 ok 信息不必打印，已在上层注释 GET 日志
+        // emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
         if (!api.ok && !api.error.isEmpty())
             emitLog(QString("  错误: %1 [%2]").arg(api.error, api.errorCode));
         if (handler)
@@ -90,6 +92,7 @@ void GantryClient::post(const QString &path, const QJsonObject &body,
             reply->deleteLater();
             return;
         }
+        // POST 成功/失败信息保留（非轮询，数量少）
         emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
         if (!api.ok && !api.error.isEmpty())
             emitLog(QString("  错误: %1 [%2]").arg(api.error, api.errorCode));
