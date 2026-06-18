@@ -6,15 +6,13 @@
 #include <QtCharts>
 #include <QChart>
 #include <QLineSeries>
-#include <QScatterSeries>
 #include <QDateTimeAxis>
 #include <QValueAxis>
 #include <QChartView>
-#include <array>
 #include <deque>
 
 // ============================================================================
-// MainWindow — PGM 旋转机架 Qt6 主控制界面（侧边栏 + 堆叠页）
+// MainWindow — PGM 旋转机架 Qt6 主控制界面（三栏工业布局）
 // ============================================================================
 
 class MainWindow : public QMainWindow {
@@ -49,31 +47,20 @@ private slots:
     void exportChartPng();
     void exportChartCsv();
     void exportLogCsv();
+    void switchCurveToSpeed();
+    void switchCurveToTorque();
 
 private:
-    enum PageIndex {
-        PageConsole = 0,
-        PageParams,
-        PageChart,
-        PageLog,
-        PageStatus,
-        PageAbout,
-        PageCount
-    };
+    enum CurveMode { CurveSpeed = 0, CurveTorque = 1 };
 
     void buildUi();
-    QWidget *buildTitleBar();
-    QWidget *buildSidebar();
-    void buildStackedPages();
-    QWidget *buildPageConsole();
-    QWidget *buildPageParameters();
-    QWidget *buildPageChart();
-    QWidget *buildPageLog();
-    QWidget *buildPageStatus();
-    QWidget *buildPageAbout();
-    void initChart();
-    void switchPage(int index);
-    void setNavActive(int index);
+    QWidget *buildTopBar();
+    QWidget *buildLeftPanel();
+    QWidget *buildCenterPanel();
+    QWidget *buildRightPanel();
+    void initTrendChart();
+    void addFormReading(QFormLayout *form, const QString &name, QLabel *&out,
+                        const QString &unit = QString());
 
     struct LedItem {
         QLabel *dot = nullptr;
@@ -82,19 +69,20 @@ private:
 
     static QLabel *makeSectionLabel(const QString &html);
     static void styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth = 72);
-    void addLedToGrid(QGridLayout *grid, int row, int col, LedItem &item, const QString &label,
-                      const QString &tooltip = QString());
-    LedItem makeLed(const QString &label, int fontPt = 8);
+    void addSensorLedRow(QFormLayout *form, const QString &name, LedItem &item);
+    LedItem makeLed(const QString &label, int fontPt = 9);
     void setLedColor(LedItem &led, bool on, bool running = false);
-    void syncStatusPageLeds();
     void updateStatusLeds(const GantryStatus &s);
+    void updateSensorPanel(const GantryStatus &s);
+    void updateMotorStatusText(const GantryStatus &s);
     void updateMotionInhibitBar(const GantryStatus &s);
     void updateConnectionStatusDisplay();
-    void updateAboutConnectionText();
+    void updateClockDisplay();
     void resetAllLeds();
     void updateAngleDisplay(const GantryStatus &s);
     void updateParameterDisplay(const GantryStatus &s);
-    void updateChart(double angle);
+    void updateTrendCharts(const GantryStatus &s);
+    void refreshCurveVisibility();
     void updateControlsForConnectionMode();
     void setMotionButtonsEnabled(bool enabled);
     void showApiErrorPopup(const TcsResponse &r);
@@ -108,28 +96,28 @@ private:
 
     GantryClient m_client;
     QTimer m_pollTimer;
+    QTimer m_clockTimer;
 
-    QStackedWidget *m_stack = nullptr;
-    QButtonGroup *m_navGroup = nullptr;
-    QList<QPushButton *> m_navButtons;
+    QRadioButton *m_localRadio = nullptr;
+    QRadioButton *m_remoteRadio = nullptr;
+    QLabel *m_timeLabel = nullptr;
 
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;
     QLabel *m_connStatusLamp = nullptr;
     QLabel *m_connStatusLabel = nullptr;
     QLabel *m_motionInhibitBar = nullptr;
-    QLabel *m_aboutConnLabel = nullptr;
 
     GaugeWidget *m_gauge = nullptr;
 
-    LedItem m_ledAuto, m_ledManual, m_ledSpeed, m_ledHoming, m_ledPosition;
-    LedItem m_ledMotor, m_ledHomingDone, m_ledEstop, m_ledSafety;
-    LedItem m_ledAir, m_ledBrakes, m_ledMotionInhibit, m_ledBeamPermit;
+    LedItem m_ledAuto, m_ledManual, m_ledHomingDone;
+    LedItem m_ledEstop, m_ledSafety, m_ledAir, m_ledZeroSwitch;
     LedItem m_ledLimitPos185, m_ledLimitNeg185;
     LedItem m_ledAtPosLimit, m_ledAtNegLimit;
-    LedItem m_ledAngleOut, m_ledTargetOut, m_ledZeroSwitch, m_ledServoFault;
+    LedItem m_ledMotionInhibit, m_ledBeamPermit;
     LedItem m_ledBrakeIndividual[6];
-    std::array<LedItem, 27> m_statusLeds{};
+
+    QLabel *m_labelMotorStatus = nullptr;
 
     QLabel *m_labelServoAngle = nullptr, *m_labelAbs01Angle = nullptr;
     QLabel *m_labelAbs02Angle = nullptr;
@@ -158,14 +146,17 @@ private:
     QPushButton *m_btnMove = nullptr;
     QPushButton *m_btnVerify = nullptr;
     QPushButton *m_btnDiscrete = nullptr;
+    QPushButton *m_btnCurveSpeed = nullptr;
+    QPushButton *m_btnCurveTorque = nullptr;
 
-    QChart *m_chart = nullptr;
-    QChartView *m_chartView = nullptr;
-    QLineSeries *m_angleSeries = nullptr;
-    QScatterSeries *m_targetScatter = nullptr;
+    QChart *m_trendChart = nullptr;
+    QChartView *m_trendChartView = nullptr;
+    QLineSeries *m_speedSeries = nullptr;
+    QLineSeries *m_torque1Series = nullptr;
+    QLineSeries *m_torque2Series = nullptr;
     QDateTimeAxis *m_timeAxis = nullptr;
-    QValueAxis *m_angleAxis = nullptr;
-    QElapsedTimer m_chartTimer;
+    QValueAxis *m_valueAxis = nullptr;
+    CurveMode m_curveMode = CurveSpeed;
     QComboBox *m_chartWindowCombo = nullptr;
     QSpinBox *m_pollIntervalSpin = nullptr;
     static constexpr int kMaxChartPoints = 1500;
