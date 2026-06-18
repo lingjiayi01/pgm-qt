@@ -10,10 +10,11 @@
 #include <QDateTimeAxis>
 #include <QValueAxis>
 #include <QChartView>
+#include <array>
 #include <deque>
 
 // ============================================================================
-// MainWindow — PGM 旋转机架 Qt6 主控制界面
+// MainWindow — PGM 旋转机架 Qt6 主控制界面（侧边栏 + 堆叠页）
 // ============================================================================
 
 class MainWindow : public QMainWindow {
@@ -50,33 +51,46 @@ private slots:
     void exportLogCsv();
 
 private:
+    enum PageIndex {
+        PageConsole = 0,
+        PageParams,
+        PageChart,
+        PageLog,
+        PageStatus,
+        PageAbout,
+        PageCount
+    };
+
     void buildUi();
     QWidget *buildTitleBar();
-    QWidget *buildStatusPanel();
-    QWidget *buildGaugePanel();
-    QWidget *buildParametersPanel();
-    QWidget *buildRightPanel();
-    QWidget *buildConnectionPanel();
-    QWidget *buildMotionPanel();
-    QWidget *buildSafetyPanel();
-    QWidget *buildChartPanel();
-    QWidget *buildLogPanel();
+    QWidget *buildSidebar();
+    void buildStackedPages();
+    QWidget *buildPageConsole();
+    QWidget *buildPageParameters();
+    QWidget *buildPageChart();
+    QWidget *buildPageLog();
+    QWidget *buildPageStatus();
+    QWidget *buildPageAbout();
+    void initChart();
+    void switchPage(int index);
+    void setNavActive(int index);
 
     struct LedItem {
         QLabel *dot = nullptr;
         QLabel *text = nullptr;
     };
 
-    static void compactGroupLayout(QLayout *layout);
+    static QLabel *makeSectionLabel(const QString &html);
     static void styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth = 72);
-    void addLedToGrid(QGridLayout *grid, int row, int col, LedItem &item, const QString &label);
-    void addParamCell(QGridLayout *grid, int row, int colBase,
-                      const QString &name, QLabel *&valueOut);
-    LedItem makeLed(const QString &label);
+    void addLedToGrid(QGridLayout *grid, int row, int col, LedItem &item, const QString &label,
+                      const QString &tooltip = QString());
+    LedItem makeLed(const QString &label, int fontPt = 8);
     void setLedColor(LedItem &led, bool on, bool running = false);
+    void syncStatusPageLeds();
     void updateStatusLeds(const GantryStatus &s);
     void updateMotionInhibitBar(const GantryStatus &s);
     void updateConnectionStatusDisplay();
+    void updateAboutConnectionText();
     void resetAllLeds();
     void updateAngleDisplay(const GantryStatus &s);
     void updateParameterDisplay(const GantryStatus &s);
@@ -95,11 +109,16 @@ private:
     GantryClient m_client;
     QTimer m_pollTimer;
 
+    QStackedWidget *m_stack = nullptr;
+    QButtonGroup *m_navGroup = nullptr;
+    QList<QPushButton *> m_navButtons;
+
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;
     QLabel *m_connStatusLamp = nullptr;
     QLabel *m_connStatusLabel = nullptr;
     QLabel *m_motionInhibitBar = nullptr;
+    QLabel *m_aboutConnLabel = nullptr;
 
     GaugeWidget *m_gauge = nullptr;
 
@@ -110,6 +129,7 @@ private:
     LedItem m_ledAtPosLimit, m_ledAtNegLimit;
     LedItem m_ledAngleOut, m_ledTargetOut, m_ledZeroSwitch, m_ledServoFault;
     LedItem m_ledBrakeIndividual[6];
+    std::array<LedItem, 27> m_statusLeds{};
 
     QLabel *m_labelServoAngle = nullptr, *m_labelAbs01Angle = nullptr;
     QLabel *m_labelAbs02Angle = nullptr;
@@ -129,7 +149,6 @@ private:
     QCheckBox *m_requireHomingCheck = nullptr;
     QCheckBox *m_autoModeCheck = nullptr;
     QWidget *m_advOptionsContent = nullptr;
-    QGroupBox *m_advOptionsGroup = nullptr;
 
     QWidget *m_motionModbusBlock = nullptr;
     QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
@@ -150,7 +169,6 @@ private:
     QComboBox *m_chartWindowCombo = nullptr;
     QSpinBox *m_pollIntervalSpin = nullptr;
     static constexpr int kMaxChartPoints = 1500;
-    static constexpr int kParamNameColWidth = 88;
 
     QTableWidget *m_logTable = nullptr;
     int m_lastHighlightRow = -1;

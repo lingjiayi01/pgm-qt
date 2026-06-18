@@ -15,21 +15,17 @@
 #include <cmath>
 
 namespace {
-constexpr int kLayoutSpacing = 6;
-constexpr int kCompactSpacing = 3;
-constexpr int kGroupInset = 4;
-constexpr int kBtnMinWidth = 72;
+constexpr int kWindowWidth = 1360;
+constexpr int kWindowHeight = 860;
+constexpr int kSidebarWidth = 220;
 constexpr int kTitleBarHeight = 44;
-constexpr int kStatusMaxWidth = 340;
-constexpr int kRightPanelMinWidth = 300;
-constexpr int kRightPanelMaxWidth = 400;
-constexpr int kRightGroupSpacing = 8;
-constexpr int kMotionLayerSpacing = 8;
-constexpr int kSafetyBtnHeight = 32;
-constexpr int kParamValueColWidth = 80;
-constexpr int kGaugeMinSize = 200;
-
-constexpr int kStatusPanelMaxWidth = 200;
+constexpr int kLayoutSpacing = 8;
+constexpr int kCompactSpacing = 4;
+constexpr int kBtnMinWidth = 72;
+constexpr int kGaugeFixedSize = 280;
+constexpr int kContentMargin = 12;
+constexpr int kLedGridColsConsole = 6;
+constexpr int kLedGridColsStatus = 4;
 
 const QString kBeamPermitLedLabel = QStringLiteral("可出束[软件占位]");
 const QString kBeamPermitLedTooltip = QStringLiteral(
@@ -42,19 +38,6 @@ const QString kBeamPermitLedTooltip = QStringLiteral(
 // ============================================================================
 static const char *kStyle = R"(
 QMainWindow { background-color: #1a1a20; }
-QGroupBox {
-    font-weight: bold; color: #c0c0d0;
-    border: 1px solid #3a3a45; border-radius: 4px;
-    margin-top: 12px; padding-top: 8px;
-    background-color: #22222a;
-}
-QGroupBox::title {
-    subcontrol-origin: margin; left: 12px; padding: 2px 8px;
-}
-QGroupBox#gbEstop::title {
-    background-color: #8b2020; color: #ffffff;
-    border-radius: 3px; padding: 4px 12px;
-}
 QLabel { color: #d0d0d8; }
 QPushButton {
     background-color: #333340; color: #d0d0d8;
@@ -63,6 +46,22 @@ QPushButton {
 }
 QPushButton:hover { background-color: #3d3d4a; border-color: #6a6a78; }
 QPushButton:pressed { background-color: #2a2a32; }
+QPushButton#navBtn {
+    background-color: transparent; border: none; border-radius: 0;
+    text-align: left; padding: 12px 16px; min-height: 36px; max-height: 40px;
+    color: #b0b0c0; font-size: 10pt;
+}
+QPushButton#navBtn:hover { background-color: #2a2a38; color: #e0e0e8; }
+QPushButton#navBtn:checked {
+    background-color: #2a4060; color: #ffffff;
+    border-left: 3px solid #5090d0;
+}
+QPushButton#navAction {
+    background-color: transparent; border: none; border-radius: 0;
+    text-align: left; padding: 10px 16px; min-height: 32px; max-height: 36px;
+    color: #9090a8; font-size: 9pt;
+}
+QPushButton#navAction:hover { background-color: #282830; color: #c0c0d0; }
 QPushButton#btnEstop {
     background-color: #b82020; border: 1px solid #ff5050;
     color: #ffffff; font-weight: bold;
@@ -83,21 +82,27 @@ QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {
     border: 1px solid #4a4a55; border-radius: 3px; padding: 4px 6px;
     min-height: 24px;
 }
-QWidget#titleBar {
+QWidget#titleBar, QWidget#sidebar {
     background-color: #141820;
-    border-bottom: 2px solid #2a4060;
 }
+QWidget#titleBar { border-bottom: 2px solid #2a3040; }
+QWidget#sidebar { border-right: 1px solid #2a3040; }
+QWidget#contentArea { background-color: #1a1a20; }
 QLabel#titleText {
     color: #e8ecf4; font-size: 16pt; font-weight: bold;
 }
 QLabel#titleSub {
     color: #8090a8; font-size: 9pt;
 }
-QLabel.paramName {
-    color: #888898; font-size: 9pt;
+QLabel.sectionHeader {
+    color: #a0a8c0; font-size: 9pt; font-weight: bold;
+    padding-top: 4px;
 }
-QLabel.paramValue {
-    color: #e8e8f0; font-size: 10pt; font-weight: bold;
+QLabel.paramNameLarge {
+    color: #9090a8; font-size: 12pt;
+}
+QLabel.paramValueLarge {
+    color: #f0f0f8; font-size: 14pt; font-weight: bold;
 }
 )";
 
@@ -105,28 +110,22 @@ QLabel.paramValue {
 // 布局辅助
 // ============================================================================
 
-void MainWindow::compactGroupLayout(QLayout *layout) {
-    if (!layout) return;
-    layout->setSpacing(kLayoutSpacing);
-    layout->setContentsMargins(6, 10, 6, 6);
-}
-
 void MainWindow::styleUniformButtons(const QList<QPushButton *> &buttons, int minWidth) {
     for (auto *btn : buttons) {
         if (!btn) continue;
-        btn->setMinimumWidth(minWidth);
+        if (minWidth > 0) btn->setMinimumWidth(minWidth);
         btn->setMinimumHeight(26);
         btn->setMaximumHeight(30);
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
 }
 
-static void styleSafetyButtons(const QList<QPushButton *> &buttons) {
-    for (auto *btn : buttons) {
-        if (!btn) continue;
-        btn->setMinimumHeight(kSafetyBtnHeight);
-        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    }
+QLabel *MainWindow::makeSectionLabel(const QString &html) {
+    auto *lb = new QLabel(html);
+    lb->setObjectName(QStringLiteral("sectionHeader"));
+    lb->setProperty("class", "sectionHeader");
+    lb->setStyleSheet(QStringLiteral("color:#a0a8c0; font-size:9pt; font-weight:bold; padding-top:4px;"));
+    return lb;
 }
 
 // ============================================================================
@@ -135,8 +134,7 @@ static void styleSafetyButtons(const QList<QPushButton *> &buttons) {
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("PGM 旋转机架控制系统");
-    resize(1360, 860);
-    setMinimumSize(1120, 720);
+    setFixedSize(kWindowWidth, kWindowHeight);
     setStyleSheet(kStyle);
     buildUi();
     loadSettings();
@@ -178,6 +176,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         setMotionButtonsEnabled(true);
     });
 
+    if (m_pollIntervalSpin) {
+        connect(m_pollIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int) { saveSettings(); });
+    }
+
     m_chartTimer.start();
 }
 
@@ -188,7 +191,7 @@ MainWindow::~MainWindow() {
 }
 
 // ============================================================================
-// 主布局 — 5 大区
+// 主布局 — 标题栏 + 侧边栏 + 堆叠内容区
 // ============================================================================
 
 void MainWindow::buildUi() {
@@ -196,37 +199,49 @@ void MainWindow::buildUi() {
     setCentralWidget(cw);
 
     auto *root = new QVBoxLayout(cw);
-    root->setSpacing(kLayoutSpacing);
-    root->setContentsMargins(8, 8, 8, 8);
+    root->setSpacing(0);
+    root->setContentsMargins(0, 0, 0, 0);
 
-    // 1. 顶部标题栏
     root->addWidget(buildTitleBar());
 
-    m_motionInhibitBar = new QLabel(QStringLiteral("运动允许"));
-    m_motionInhibitBar->setAlignment(Qt::AlignCenter);
-    m_motionInhibitBar->setStyleSheet(
-        "background-color:#1a3a1a; color:#80e080; font-weight:bold;"
-        "padding:4px 8px; border-radius:4px; font-size:9pt;");
-    root->addWidget(m_motionInhibitBar);
+    auto *body = new QHBoxLayout;
+    body->setSpacing(0);
+    body->setContentsMargins(0, 0, 0, 0);
+    body->addWidget(buildSidebar());
 
-    // 上排四块：系统状态(窄列) | 表盘 | 实时参数 | 右侧控制(加宽)
-    auto *upper = new QHBoxLayout;
-    upper->setSpacing(kLayoutSpacing);
-    upper->addWidget(buildStatusPanel(), 0);
-    upper->addWidget(buildGaugePanel(), 2);
-    upper->addWidget(buildParametersPanel(), 2);
-    upper->addWidget(buildRightPanel(), 5);
-    root->addLayout(upper, 3);
+    m_stack = new QStackedWidget;
+    m_stack->setObjectName("contentArea");
+    buildStackedPages();
+    body->addWidget(m_stack, 1);
+    root->addLayout(body, 1);
 
-    // 5. 底部：曲线 | 日志（左右平分）
-    auto *bottom = new QHBoxLayout;
-    bottom->setSpacing(kLayoutSpacing);
-    bottom->addWidget(buildChartPanel(), 1);
-    bottom->addWidget(buildLogPanel(), 1);
-    root->addLayout(bottom, 2);
-
-    // 所有控件构建完成后统一设置初始状态
+    switchPage(PageConsole);
     updateControlsForConnectionMode();
+}
+
+void MainWindow::switchPage(int index) {
+    if (!m_stack || index < 0 || index >= m_stack->count()) return;
+    m_stack->setCurrentIndex(index);
+    setNavActive(index);
+}
+
+void MainWindow::setNavActive(int index) {
+    for (int i = 0; i < m_navButtons.size(); ++i) {
+        if (!m_navButtons[i]) continue;
+        const bool pageBtn = m_navButtons[i]->property("pageIndex").isValid();
+        if (!pageBtn) continue;
+        if (m_navButtons[i]->property("pageIndex").toInt() == index)
+            m_navButtons[i]->setChecked(true);
+    }
+}
+
+void MainWindow::buildStackedPages() {
+    m_stack->addWidget(buildPageConsole());
+    m_stack->addWidget(buildPageParameters());
+    m_stack->addWidget(buildPageChart());
+    m_stack->addWidget(buildPageLog());
+    m_stack->addWidget(buildPageStatus());
+    m_stack->addWidget(buildPageAbout());
 }
 
 // ============================================================================
@@ -258,11 +273,79 @@ QWidget *MainWindow::buildTitleBar() {
     return bar;
 }
 
+QWidget *MainWindow::buildSidebar() {
+    auto *side = new QWidget;
+    side->setObjectName("sidebar");
+    side->setFixedWidth(kSidebarWidth);
+
+    auto *v = new QVBoxLayout(side);
+    v->setSpacing(0);
+    v->setContentsMargins(0, 8, 0, 8);
+
+    m_navGroup = new QButtonGroup(this);
+    m_navGroup->setExclusive(true);
+
+    auto addNav = [&](const QString &text, int pageIndex) {
+        auto *btn = new QPushButton(text);
+        btn->setObjectName("navBtn");
+        btn->setCheckable(true);
+        btn->setProperty("pageIndex", pageIndex);
+        m_navGroup->addButton(btn);
+        m_navButtons.append(btn);
+        connect(btn, &QPushButton::clicked, this, [this, pageIndex]() {
+            switchPage(pageIndex);
+        });
+        v->addWidget(btn);
+        return btn;
+    };
+
+    addNav(QStringLiteral("🖥  控制台"), PageConsole);
+    addNav(QStringLiteral("📊  实时参数"), PageParams);
+    addNav(QStringLiteral("📈  角度曲线"), PageChart);
+    addNav(QStringLiteral("📋  通信日志"), PageLog);
+    addNav(QStringLiteral("🔧  系统状态"), PageStatus);
+
+    v->addSpacing(8);
+
+    m_btnVerify = new QPushButton(QStringLiteral("✔  点表巡检"));
+    m_btnVerify->setObjectName("navAction");
+    connect(m_btnVerify, &QPushButton::clicked, this, &MainWindow::runPointTableVerify);
+    v->addWidget(m_btnVerify);
+    m_navButtons.append(m_btnVerify);
+
+    m_btnDiscrete = new QPushButton(QStringLiteral("🔍  离散量监视"));
+    m_btnDiscrete->setObjectName("navAction");
+    connect(m_btnDiscrete, &QPushButton::clicked, this, &MainWindow::showDiscreteMonitor);
+    v->addWidget(m_btnDiscrete);
+    m_navButtons.append(m_btnDiscrete);
+
+    v->addSpacing(8);
+    addNav(QStringLiteral("ℹ  关于"), PageAbout);
+
+    v->addStretch(1);
+
+    auto *connRow = new QWidget;
+    auto *connHl = new QHBoxLayout(connRow);
+    connHl->setContentsMargins(16, 8, 12, 4);
+    connHl->setSpacing(8);
+    m_connStatusLamp = new QLabel;
+    m_connStatusLamp->setFixedSize(12, 12);
+    m_connStatusLamp->setStyleSheet(
+        "background-color:#d04040; border-radius:6px;");
+    m_connStatusLabel = new QLabel(QStringLiteral("已断开"));
+    m_connStatusLabel->setStyleSheet("color:#d04040; font-size:9pt; font-weight:bold;");
+    connHl->addWidget(m_connStatusLamp, 0, Qt::AlignVCenter);
+    connHl->addWidget(m_connStatusLabel, 1, Qt::AlignVCenter);
+    v->addWidget(connRow);
+
+    return side;
+}
+
 // ============================================================================
 // LED 工具
 // ============================================================================
 
-MainWindow::LedItem MainWindow::makeLed(const QString &label) {
+MainWindow::LedItem MainWindow::makeLed(const QString &label, int fontPt) {
     LedItem item;
     item.dot = new QLabel;
     item.dot->setFixedSize(8, 8);
@@ -270,21 +353,28 @@ MainWindow::LedItem MainWindow::makeLed(const QString &label) {
         "background-color:#555; border-radius:4px;"
         "min-width:8px; min-height:8px;");
     item.text = new QLabel(label);
-    item.text->setStyleSheet("color:#b0b0b8; font-size:8pt;");
+    item.text->setStyleSheet(
+        QStringLiteral("color:#b0b0b8; font-size:%1pt;").arg(fontPt));
     item.text->setMinimumWidth(0);
     return item;
 }
 
 void MainWindow::addLedToGrid(QGridLayout *grid, int row, int col,
-                              LedItem &item, const QString &label) {
+                              LedItem &item, const QString &label,
+                              const QString &tooltip) {
     item = makeLed(label);
     auto *cell = new QWidget;
     auto *hl = new QHBoxLayout(cell);
     hl->setContentsMargins(1, 0, 2, 0);
-    hl->setSpacing(4);
+    hl->setSpacing(3);
     hl->addWidget(item.dot, 0, Qt::AlignVCenter);
     hl->addWidget(item.text, 1, Qt::AlignVCenter);
     item.text->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    if (!tooltip.isEmpty()) {
+        cell->setToolTip(tooltip);
+        item.dot->setToolTip(tooltip);
+        item.text->setToolTip(tooltip);
+    }
     grid->addWidget(cell, row, col);
 }
 
@@ -305,294 +395,163 @@ void MainWindow::setLedColor(LedItem &led, bool on, bool running) {
         on ? "color:#e0e0e8; font-size:8pt;" : "color:#b0b0b8; font-size:8pt;");
 }
 
-// ============================================================================
-// 2. 左上 — 系统状态（单列垂直，完整名称）
-// ============================================================================
-
-QWidget *MainWindow::buildStatusPanel() {
-    auto *gb = new QGroupBox("系统状态");
-    auto *scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    auto *inner = new QWidget;
-    auto *v = new QVBoxLayout(inner);
-    v->setSpacing(2);
-    v->setContentsMargins(2, 4, 2, 4);
-
-    auto addLedRow = [&](LedItem &item, const QString &label,
-                          const QString &tooltip = QString()) {
-        item = makeLed(label);
-        auto *row = new QWidget;
-        auto *hl = new QHBoxLayout(row);
-        hl->setContentsMargins(1, 0, 2, 0);
-        hl->setSpacing(4);
-        hl->addWidget(item.dot, 0, Qt::AlignVCenter);
-        hl->addWidget(item.text, 1, Qt::AlignVCenter);
-        item.text->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        if (!tooltip.isEmpty()) {
-            row->setToolTip(tooltip);
-            item.dot->setToolTip(tooltip);
-            item.text->setToolTip(tooltip);
-        }
-        v->addWidget(row);
+void MainWindow::syncStatusPageLeds() {
+    auto copyOne = [](const LedItem &src, LedItem &dst) {
+        if (!src.dot || !dst.dot || !src.text || !dst.text) return;
+        dst.dot->setStyleSheet(src.dot->styleSheet());
+        dst.text->setText(src.text->text());
+        dst.text->setStyleSheet(src.text->styleSheet());
+        dst.text->setToolTip(src.text->toolTip());
+        dst.dot->setToolTip(src.dot->toolTip());
     };
-
-    addLedRow(m_ledAuto,          "自动模式");
-    addLedRow(m_ledManual,        "手动模式");
-    addLedRow(m_ledSpeed,         "速度模式");
-    addLedRow(m_ledHoming,        "寻零运行");
-    addLedRow(m_ledPosition,      "位置运行");
-    addLedRow(m_ledMotor,         "电机运行");
-    addLedRow(m_ledHomingDone,    "寻零完成");
-    addLedRow(m_ledEstop,         "急停正常");
-    addLedRow(m_ledSafety,        "安全继电器");
-    addLedRow(m_ledAir,           "气压正常");
-    addLedRow(m_ledBrakes,        "制动器关闭");
-    addLedRow(m_ledZeroSwitch,    "零位开关");
-    addLedRow(m_ledLimitPos185,   "+185°极限");
-    addLedRow(m_ledLimitNeg185,   "-185°极限");
-    addLedRow(m_ledAtPosLimit,    "正极限未触发");
-    addLedRow(m_ledAtNegLimit,    "负极限未触发");
-    addLedRow(m_ledAngleOut,      "角度未超范围");
-    addLedRow(m_ledTargetOut,     "目标未超范围");
-    addLedRow(m_ledServoFault,    "伺服无故障");
-    for (int i = 0; i < 6; ++i)
-        addLedRow(m_ledBrakeIndividual[i],
-                  QStringLiteral("制动%1关闭").arg(i + 1));
-    addLedRow(m_ledMotionInhibit, "运动允许");
-    addLedRow(m_ledBeamPermit, kBeamPermitLedLabel, kBeamPermitLedTooltip);
-
-    v->addStretch(1);
-    scroll->setWidget(inner);
-    auto *outer = new QVBoxLayout(gb);
-    outer->setContentsMargins(4, 8, 4, 4);
-    outer->addWidget(scroll);
-
-    gb->setMaximumWidth(kStatusPanelMaxWidth);
-    gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
-    return gb;
+    const LedItem *src[] = {
+        &m_ledAuto, &m_ledManual, &m_ledSpeed, &m_ledHoming, &m_ledPosition,
+        &m_ledMotor, &m_ledHomingDone, &m_ledEstop, &m_ledSafety, &m_ledAir,
+        &m_ledBrakes, &m_ledZeroSwitch, &m_ledLimitPos185, &m_ledLimitNeg185,
+        &m_ledAtPosLimit, &m_ledAtNegLimit, &m_ledAngleOut, &m_ledTargetOut,
+        &m_ledServoFault, &m_ledBrakeIndividual[0], &m_ledBrakeIndividual[1],
+        &m_ledBrakeIndividual[2], &m_ledBrakeIndividual[3], &m_ledBrakeIndividual[4],
+        &m_ledBrakeIndividual[5], &m_ledMotionInhibit, &m_ledBeamPermit,
+    };
+    for (int i = 0; i < 27; ++i)
+        copyOne(*src[i], m_statusLeds[i]);
 }
 
 // ============================================================================
-// 3. 中 — 角度表盘
+// 堆叠页面
 // ============================================================================
 
-QWidget *MainWindow::buildGaugePanel() {
-    auto *gb = new QGroupBox("角度表盘");
-    auto *l = new QVBoxLayout(gb);
-    compactGroupLayout(l);
+QWidget *MainWindow::buildPageConsole() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setSpacing(kLayoutSpacing);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
 
+    m_motionInhibitBar = new QLabel(QStringLiteral("运动允许"));
+    m_motionInhibitBar->setAlignment(Qt::AlignCenter);
+    m_motionInhibitBar->setStyleSheet(
+        "background-color:#1a3a1a; color:#80e080; font-weight:bold;"
+        "padding:4px 8px; border-radius:4px; font-size:9pt;");
+    v->addWidget(m_motionInhibitBar);
+
+    // 表盘 + 连接设置
+    auto *topRow = new QHBoxLayout;
+    topRow->setSpacing(kLayoutSpacing);
     m_gauge = new GaugeWidget;
     m_gauge->setTitle("旋转机架");
-    m_gauge->setMinimumSize(kGaugeMinSize, kGaugeMinSize);
-    m_gauge->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    l->addWidget(m_gauge);
+    m_gauge->setFixedSize(kGaugeFixedSize, kGaugeFixedSize);
+    topRow->addWidget(m_gauge, 0, Qt::AlignTop);
 
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
-}
+    auto *connWrap = new QWidget;
+    auto *connV = new QVBoxLayout(connWrap);
+    connV->setSpacing(kCompactSpacing);
+    connV->setContentsMargins(8, 0, 0, 0);
+    connV->addWidget(makeSectionLabel(QStringLiteral("<b>连接设置</b>")));
 
-void MainWindow::addParamCell(QGridLayout *grid, int row, int colBase,
-                              const QString &name, QLabel *&valueOut) {
-    auto *nameLb = new QLabel(name);
-    nameLb->setFixedWidth(kParamNameColWidth);
-    nameLb->setStyleSheet("color:#888898; font-size:8pt;");
-    nameLb->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-
-    valueOut = new QLabel("—");
-    valueOut->setFixedWidth(kParamValueColWidth);
-    valueOut->setStyleSheet("color:#e8e8f0; font-size:9pt; font-weight:bold;");
-    valueOut->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    valueOut->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-
-    grid->addWidget(nameLb, row, colBase);
-    grid->addWidget(valueOut, row, colBase + 1);
-}
-
-// ============================================================================
-// 4. 中右 — 实时参数（两列网格，固定列宽）
-// ============================================================================
-
-QWidget *MainWindow::buildParametersPanel() {
-    auto *gb = new QGroupBox("实时参数");
-    auto *grid = new QGridLayout(gb);
-    grid->setSpacing(kCompactSpacing);
-    grid->setContentsMargins(kGroupInset, kGroupInset + 2, kGroupInset, kGroupInset);
-    grid->setColumnMinimumWidth(0, kParamNameColWidth);
-    grid->setColumnMinimumWidth(1, kParamValueColWidth);
-    grid->setColumnMinimumWidth(2, kParamNameColWidth);
-    grid->setColumnMinimumWidth(3, kParamValueColWidth);
-
-    addParamCell(grid, 0, 0, "\u4F3A\u670D\u89D2(\u00B0)",   m_labelServoAngle);
-    addParamCell(grid, 0, 2, "ABS_01(\u00B0)",   m_labelAbs01Angle);
-    addParamCell(grid, 1, 0, "ABS_02(\u00B0)",   m_labelAbs02Angle);
-    addParamCell(grid, 1, 2, "\u901F\u5EA6(\u00B0/s)",     m_labelCurrentSpeed);
-    addParamCell(grid, 2, 0, "\u4F4D\u7ED9\u5B9A(\u00B0)",   m_labelPositionSetpoint);
-    addParamCell(grid, 2, 2, "\u901F\u7ED9\u5B9A(\u00B0/s)", m_labelSpeedSetpoint);
-    addParamCell(grid, 3, 0, "\u626D\u77E91(Nm)",    m_labelServo1Torque);
-    addParamCell(grid, 3, 2, "\u626D\u77E92(Nm)",    m_labelServo2Torque);
-    addParamCell(grid, 4, 0, "\u4E32\u52A81(mm)",    m_labelSlip1);
-    addParamCell(grid, 4, 2, "\u4E32\u52A82(mm)",    m_labelSlip2);
-    addParamCell(grid, 5, 0, "\u526A\u5207\u529B(N)",   m_labelShearForce);
-    addParamCell(grid, 5, 2, "\u8FC7\u51B2(\u00B0)",     m_labelEstopOvershoot);
-
-    gb->setMaximumWidth(kParamNameColWidth * 2 + kParamValueColWidth * 2 + 24);
-    gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
-    return gb;
-}
-
-// ============================================================================
-// 5. 最右侧 — 连接 / 运动 / 安全（三等高）
-// ============================================================================
-
-QWidget *MainWindow::buildRightPanel() {
-    auto *wrap = new QWidget;
-    wrap->setMinimumWidth(kRightPanelMinWidth);
-    auto *v = new QVBoxLayout(wrap);
-    v->setSpacing(kRightGroupSpacing);
-    v->setContentsMargins(0, 0, 0, 0);
-
-    v->addWidget(buildConnectionPanel(), 1);
-    v->addWidget(buildMotionPanel(), 1);
-    v->addWidget(buildSafetyPanel(), 1);
-
-    wrap->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return wrap;
-}
-
-QWidget *MainWindow::buildConnectionPanel() {
-    auto *gb = new QGroupBox("连接设置");
-    auto *v = new QVBoxLayout(gb);
-    compactGroupLayout(v);
-    v->setSpacing(kLayoutSpacing);
-
-    auto *inputRow = new QHBoxLayout;
-    inputRow->setSpacing(kCompactSpacing);
-    auto *hostLb = new QLabel("主机");
-    hostLb->setFixedWidth(36);
-    m_hostEdit = new QLineEdit("127.0.0.1");
-    m_hostEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *portLb = new QLabel("端口");
-    portLb->setFixedWidth(36);
-    m_portEdit = new QLineEdit("8080");
-    m_portEdit->setFixedWidth(56);
-    inputRow->addWidget(hostLb);
-    inputRow->addWidget(m_hostEdit, 2);
-    inputRow->addWidget(portLb);
-    inputRow->addWidget(m_portEdit);
-    v->addLayout(inputRow);
-
-    auto *actionRow = new QHBoxLayout;
-    actionRow->setSpacing(kLayoutSpacing);
-    auto *btnC = new QPushButton("连接后端");
-    btnC->setObjectName("btnConnect");
-    connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToBackend);
-    auto *btnD = new QPushButton("断开");
-    btnD->setObjectName("btnDisconnect");
-    connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromBackend);
-    styleUniformButtons({btnC, btnD}, 0);
-    actionRow->addWidget(btnC, 1);
-    actionRow->addWidget(btnD, 1);
-
-    m_connStatusLamp = new QLabel;
-    m_connStatusLamp->setFixedSize(14, 14);
-    m_connStatusLamp->setStyleSheet(
-        "background-color:#d04040; border-radius:7px; min-width:14px; min-height:14px;");
-    m_connStatusLabel = new QLabel("已断开");
-    m_connStatusLabel->setStyleSheet("color:#d04040; font-size:10pt; font-weight:bold;");
-    actionRow->addWidget(m_connStatusLamp, 0, Qt::AlignVCenter);
-    actionRow->addWidget(m_connStatusLabel, 1, Qt::AlignVCenter);
-    v->addLayout(actionRow);
-
-    auto *engRow = new QHBoxLayout;
-    engRow->setSpacing(kLayoutSpacing);
-    m_btnVerify = new QPushButton("点表巡检");
-    connect(m_btnVerify, &QPushButton::clicked, this, &MainWindow::runPointTableVerify);
-    m_btnDiscrete = new QPushButton("离散量");
-    connect(m_btnDiscrete, &QPushButton::clicked, this, &MainWindow::showDiscreteMonitor);
-    styleUniformButtons({m_btnVerify, m_btnDiscrete}, 0);
-    engRow->addWidget(m_btnVerify, 1);
-    engRow->addWidget(m_btnDiscrete, 1);
-    v->addLayout(engRow);
-
-    auto *pollRow = new QHBoxLayout;
-    pollRow->setSpacing(kCompactSpacing);
-    auto *pollLb = new QLabel("轮询");
-    pollLb->setFixedWidth(36);
+    auto *form = new QFormLayout;
+    form->setSpacing(kCompactSpacing);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_hostEdit = new QLineEdit(QStringLiteral("127.0.0.1"));
+    m_portEdit = new QLineEdit(QStringLiteral("8080"));
+    m_portEdit->setMaximumWidth(80);
+    auto *protoEdit = new QLineEdit(QStringLiteral("HTTP REST"));
+    protoEdit->setReadOnly(true);
+    form->addRow(QStringLiteral("主机"), m_hostEdit);
+    form->addRow(QStringLiteral("端口"), m_portEdit);
+    form->addRow(QStringLiteral("协议"), protoEdit);
     m_pollIntervalSpin = new QSpinBox;
     m_pollIntervalSpin->setRange(300, 5000);
     m_pollIntervalSpin->setValue(1000);
-    m_pollIntervalSpin->setSuffix(" ms");
-    m_pollIntervalSpin->setSingleStep(100);
-    connect(m_pollIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
-            [this](int) { saveSettings(); });
-    pollRow->addWidget(pollLb);
-    pollRow->addWidget(m_pollIntervalSpin, 1);
-    v->addLayout(pollRow);
-    v->addStretch(1);
+    m_pollIntervalSpin->setSuffix(QStringLiteral(" ms"));
+    form->addRow(QStringLiteral("轮询"), m_pollIntervalSpin);
+    connV->addLayout(form);
 
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
-}
+    auto *connBtns = new QHBoxLayout;
+    auto *btnC = new QPushButton(QStringLiteral("连接"));
+    btnC->setObjectName("btnConnect");
+    connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToBackend);
+    auto *btnD = new QPushButton(QStringLiteral("断开"));
+    btnD->setObjectName("btnDisconnect");
+    connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromBackend);
+    styleUniformButtons({btnC, btnD}, 0);
+    connBtns->addWidget(btnC, 1);
+    connBtns->addWidget(btnD, 1);
+    connV->addLayout(connBtns);
+    connV->addStretch(1);
+    topRow->addWidget(connWrap, 1);
+    v->addLayout(topRow);
 
-QWidget *MainWindow::buildMotionPanel() {
-    auto *gb = new QGroupBox("运动控制");
-    auto *v = new QVBoxLayout(gb);
-    compactGroupLayout(v);
-    v->setSpacing(kMotionLayerSpacing);
+    v->addSpacing(4);
+    v->addWidget(makeSectionLabel(QStringLiteral("<b>状态指示</b>")));
 
+    auto *ledGrid = new QGridLayout;
+    ledGrid->setSpacing(2);
+    ledGrid->setContentsMargins(0, 0, 0, 0);
+    int c = 0;
+    auto addC = [&](LedItem &led, const QString &lb, const QString &tip = QString()) {
+        addLedToGrid(ledGrid, c / kLedGridColsConsole, c % kLedGridColsConsole, led, lb, tip);
+        ++c;
+    };
+    addC(m_ledAuto, "自动");
+    addC(m_ledManual, "手动");
+    addC(m_ledSpeed, "速度");
+    addC(m_ledHoming, "寻零");
+    addC(m_ledPosition, "位置");
+    addC(m_ledMotor, "电机");
+    addC(m_ledHomingDone, "寻零完");
+    addC(m_ledEstop, "急停");
+    addC(m_ledSafety, "安全");
+    addC(m_ledAir, "气压");
+    addC(m_ledBrakes, "制动关");
+    addC(m_ledZeroSwitch, "零位");
+    addC(m_ledLimitPos185, "+185");
+    addC(m_ledLimitNeg185, "-185");
+    addC(m_ledAtPosLimit, "正极限");
+    addC(m_ledAtNegLimit, "负极限");
+    addC(m_ledAngleOut, "角范围");
+    addC(m_ledTargetOut, "目标范围");
+    addC(m_ledServoFault, "伺服");
+    for (int i = 0; i < 6; ++i)
+        addC(m_ledBrakeIndividual[i], QStringLiteral("制%1").arg(i + 1));
+    addC(m_ledMotionInhibit, "运动允许");
+    addC(m_ledBeamPermit, kBeamPermitLedLabel, kBeamPermitLedTooltip);
+    v->addLayout(ledGrid);
+
+    v->addSpacing(6);
     m_motionModbusBlock = new QWidget;
-    auto *modbusV = new QVBoxLayout(m_motionModbusBlock);
-    modbusV->setSpacing(kMotionLayerSpacing);
-    modbusV->setContentsMargins(0, 0, 0, 0);
+    auto *motV = new QVBoxLayout(m_motionModbusBlock);
+    motV->setSpacing(kCompactSpacing);
+    motV->setContentsMargins(0, 0, 0, 0);
 
-    // ① 模式：四按钮等宽整行
-    auto *modeRow = new QHBoxLayout;
-    modeRow->setSpacing(kLayoutSpacing);
+    motV->addWidget(makeSectionLabel(QStringLiteral("<b>模式</b>")));
+    auto *modeG = new QGridLayout;
+    modeG->setSpacing(kCompactSpacing);
     m_btnAuto = new QPushButton("自动");
-    connect(m_btnAuto, &QPushButton::clicked, this, &MainWindow::setAutoMode);
     m_btnManual = new QPushButton("手动");
-    connect(m_btnManual, &QPushButton::clicked, this, &MainWindow::setManualMode);
     m_btnHome = new QPushButton("寻零");
-    connect(m_btnHome, &QPushButton::clicked, this, &MainWindow::startHoming);
     m_btnReset = new QPushButton("复位");
+    connect(m_btnAuto, &QPushButton::clicked, this, &MainWindow::setAutoMode);
+    connect(m_btnManual, &QPushButton::clicked, this, &MainWindow::setManualMode);
+    connect(m_btnHome, &QPushButton::clicked, this, &MainWindow::startHoming);
     connect(m_btnReset, &QPushButton::clicked, this, &MainWindow::resetFault);
     styleUniformButtons({m_btnAuto, m_btnManual, m_btnHome, m_btnReset}, 0);
-    modeRow->addWidget(m_btnAuto, 1);
-    modeRow->addWidget(m_btnManual, 1);
-    modeRow->addWidget(m_btnHome, 1);
-    modeRow->addWidget(m_btnReset, 1);
-    modbusV->addLayout(modeRow);
+    modeG->addWidget(m_btnAuto, 0, 0);
+    modeG->addWidget(m_btnManual, 0, 1);
+    modeG->addWidget(m_btnHome, 0, 2);
+    modeG->addWidget(m_btnReset, 0, 3);
+    motV->addLayout(modeG);
 
-    // ② 点动：参数组 + 三按钮组
-    auto *jogRow = new QHBoxLayout;
-    jogRow->setSpacing(kLayoutSpacing);
-    auto *jogParams = new QHBoxLayout;
-    jogParams->setSpacing(kCompactSpacing);
-    auto *jogSpdLb = new QLabel("速度");
-    jogSpdLb->setFixedWidth(32);
+    motV->addWidget(makeSectionLabel(QStringLiteral("<b>点动</b>")));
+    auto *jogG = new QGridLayout;
+    jogG->setSpacing(kCompactSpacing);
     m_jogSpeedSpin = new QDoubleSpinBox;
     m_jogSpeedSpin->setRange(0.1, 20.0);
     m_jogSpeedSpin->setValue(3.0);
     m_jogSpeedSpin->setSuffix(" °/s");
-    m_jogSpeedSpin->setDecimals(1);
-    m_jogSpeedSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *jogSecLb = new QLabel("时长");
-    jogSecLb->setFixedWidth(32);
     m_jogSecondsSpin = new QDoubleSpinBox;
     m_jogSecondsSpin->setRange(0.1, 60.0);
     m_jogSecondsSpin->setValue(1.0);
     m_jogSecondsSpin->setSuffix(" s");
-    m_jogSecondsSpin->setDecimals(1);
-    m_jogSecondsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    jogParams->addWidget(jogSpdLb);
-    jogParams->addWidget(m_jogSpeedSpin, 1);
-    jogParams->addWidget(jogSecLb);
-    jogParams->addWidget(m_jogSecondsSpin, 1);
-
-    auto *jogBtns = new QHBoxLayout;
-    jogBtns->setSpacing(kLayoutSpacing);
     auto *btnFwd = new QPushButton("正转");
     auto *btnRev = new QPushButton("反转");
     auto *btnStop = new QPushButton("停止");
@@ -600,198 +559,154 @@ QWidget *MainWindow::buildMotionPanel() {
     connect(btnRev, &QPushButton::clicked, this, &MainWindow::jogRev);
     connect(btnStop, &QPushButton::clicked, this, &MainWindow::stopManual);
     styleUniformButtons({btnFwd, btnRev, btnStop}, 0);
-    jogBtns->addWidget(btnFwd, 1);
-    jogBtns->addWidget(btnRev, 1);
-    jogBtns->addWidget(btnStop, 1);
+    jogG->addWidget(new QLabel("速度"), 0, 0);
+    jogG->addWidget(m_jogSpeedSpin, 0, 1);
+    jogG->addWidget(new QLabel("时长"), 0, 2);
+    jogG->addWidget(m_jogSecondsSpin, 0, 3);
+    jogG->addWidget(btnFwd, 0, 4);
+    jogG->addWidget(btnRev, 0, 5);
+    jogG->addWidget(btnStop, 0, 6);
+    motV->addLayout(jogG);
 
-    jogRow->addLayout(jogParams, 1);
-    jogRow->addLayout(jogBtns, 1);
-    modbusV->addLayout(jogRow);
-    v->addWidget(m_motionModbusBlock);
-
-    // ③ 定位：角度+速度一行，执行按钮独占下一行
-    auto *posInputRow = new QHBoxLayout;
-    posInputRow->setSpacing(kLayoutSpacing);
-    auto *angLb = new QLabel("角度");
-    angLb->setFixedWidth(32);
+    motV->addWidget(makeSectionLabel(QStringLiteral("<b>定位</b>")));
+    auto *posG = new QGridLayout;
+    posG->setSpacing(kCompactSpacing);
     m_targetAngleSpin = new QDoubleSpinBox;
     m_targetAngleSpin->setRange(-185.0, 185.0);
-    m_targetAngleSpin->setValue(0.0);
     m_targetAngleSpin->setSuffix(" °");
-    m_targetAngleSpin->setDecimals(2);
-    m_targetAngleSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *spdLb = new QLabel("速度");
-    spdLb->setFixedWidth(32);
     m_targetSpeedSpin = new QDoubleSpinBox;
     m_targetSpeedSpin->setRange(0.1, 20.0);
     m_targetSpeedSpin->setValue(3.0);
     m_targetSpeedSpin->setSuffix(" °/s");
-    m_targetSpeedSpin->setDecimals(1);
-    m_targetSpeedSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    posInputRow->addWidget(angLb);
-    posInputRow->addWidget(m_targetAngleSpin, 1);
-    posInputRow->addWidget(spdLb);
-    posInputRow->addWidget(m_targetSpeedSpin, 1);
-    auto *toLb = new QLabel("\u8D85\u65F6");
-    toLb->setFixedWidth(32);
     m_timeoutSpin = new QDoubleSpinBox;
     m_timeoutSpin->setRange(10.0, 600.0);
     m_timeoutSpin->setValue(300.0);
     m_timeoutSpin->setSuffix(" s");
-    m_timeoutSpin->setDecimals(0);
-    m_timeoutSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    posInputRow->addWidget(toLb);
-    posInputRow->addWidget(m_timeoutSpin, 1);
-    v->addLayout(posInputRow);
+    m_btnMove = new QPushButton("执行定角");
+    m_btnMove->setObjectName("btnMove");
+    connect(m_btnMove, &QPushButton::clicked, this, &MainWindow::moveToPosition);
+    styleUniformButtons({m_btnMove}, 0);
+    posG->addWidget(new QLabel("目标角"), 0, 0);
+    posG->addWidget(m_targetAngleSpin, 0, 1);
+    posG->addWidget(new QLabel("速度"), 0, 2);
+    posG->addWidget(m_targetSpeedSpin, 0, 3);
+    posG->addWidget(new QLabel("超时"), 0, 4);
+    posG->addWidget(m_timeoutSpin, 0, 5);
+    posG->addWidget(m_btnMove, 0, 6);
+    motV->addLayout(posG);
 
-    auto *btnMove = new QPushButton("\u6267\u884C\u5B9A\u4F4D");
-    btnMove->setObjectName("btnMove");
-    connect(btnMove, &QPushButton::clicked, this, &MainWindow::moveToPosition);
-    styleUniformButtons({btnMove}, 0);
-    m_btnMove = btnMove;
-    v->addWidget(btnMove);
+    motV->addWidget(makeSectionLabel(QStringLiteral("<b>安全</b>")));
+    auto *safeG = new QGridLayout;
+    safeG->setSpacing(kCompactSpacing);
+    m_btnEstop = new QPushButton("触发急停");
+    m_btnEstop->setObjectName("btnEstop");
+    m_btnBrakesClose = new QPushButton("关闭制动");
+    m_btnBrakesOpen = new QPushButton("打开制动");
+    m_btnEstopRecover = new QPushButton("急停恢复");
+    connect(m_btnEstop, &QPushButton::clicked, this, &MainWindow::emergencyStop);
+    connect(m_btnBrakesClose, &QPushButton::clicked, this, &MainWindow::closeBrakes);
+    connect(m_btnBrakesOpen, &QPushButton::clicked, this, &MainWindow::openBrakes);
+    connect(m_btnEstopRecover, &QPushButton::clicked, this, &MainWindow::recoverEstop);
+    styleUniformButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstopRecover}, 0);
+    safeG->addWidget(m_btnEstop, 0, 0);
+    safeG->addWidget(m_btnBrakesClose, 0, 1);
+    safeG->addWidget(m_btnBrakesOpen, 0, 2);
+    safeG->addWidget(m_btnEstopRecover, 0, 3);
+    motV->addLayout(safeG);
 
-    // 高级选项（可折叠）
-    m_advOptionsGroup = new QGroupBox("高级选项");
-    m_advOptionsGroup->setCheckable(true);
-    m_advOptionsGroup->setChecked(false);
+    motV->addWidget(makeSectionLabel(QStringLiteral("<b>工作流</b>")));
+    auto *wfG = new QGridLayout;
+    wfG->setSpacing(kCompactSpacing);
+    m_btnSelfTest = new QPushButton("上电自检");
+    m_btnWorkflow = new QPushButton("完整工作流");
+    connect(m_btnSelfTest, &QPushButton::clicked, this, &MainWindow::runSelfTest);
+    connect(m_btnWorkflow, &QPushButton::clicked, this, &MainWindow::runWorkflowFull);
+    styleUniformButtons({m_btnSelfTest, m_btnWorkflow}, 0);
+    wfG->addWidget(m_btnSelfTest, 0, 0);
+    wfG->addWidget(m_btnWorkflow, 0, 1);
+    motV->addLayout(wfG);
+
+    v->addWidget(m_motionModbusBlock);
+
+    // 高级选项（隐藏控件，供 API 传参）
     m_advOptionsContent = new QWidget;
     auto *advV = new QVBoxLayout(m_advOptionsContent);
-    advV->setSpacing(kCompactSpacing);
     advV->setContentsMargins(0, 0, 0, 0);
-
-    auto *tolRow = new QHBoxLayout;
-    auto *tolLb = new QLabel("容差");
-    tolLb->setFixedWidth(56);
     m_tolSpin = new QDoubleSpinBox;
-    m_tolSpin->setRange(0.05, 5.0);
     m_tolSpin->setValue(0.5);
-    m_tolSpin->setSuffix(" °");
-    m_tolSpin->setDecimals(2);
-    tolRow->addWidget(tolLb);
-    tolRow->addWidget(m_tolSpin, 1);
-    advV->addLayout(tolRow);
-
-    auto *arrRow = new QHBoxLayout;
-    auto *arrLb = new QLabel("到位模式");
-    arrLb->setFixedWidth(56);
     m_arrivalModeCombo = new QComboBox;
     m_arrivalModeCombo->addItem("hybrid", "hybrid");
     m_arrivalModeCombo->addItem("strict_04", "strict_04");
     m_arrivalModeCombo->addItem("angle", "angle");
-    arrRow->addWidget(arrLb);
-    arrRow->addWidget(m_arrivalModeCombo, 1);
-    advV->addLayout(arrRow);
-
-    m_requireHomingCheck = new QCheckBox("要求寻零完成");
+    m_requireHomingCheck = new QCheckBox;
     m_requireHomingCheck->setChecked(true);
-    m_autoModeCheck = new QCheckBox("自动切换模式");
+    m_autoModeCheck = new QCheckBox;
     m_autoModeCheck->setChecked(true);
-    advV->addWidget(m_requireHomingCheck);
-    advV->addWidget(m_autoModeCheck);
-
-    auto *graceRow = new QHBoxLayout;
-    auto *graceLb = new QLabel("DI04宽限");
-    graceLb->setFixedWidth(56);
     m_di04GraceSpin = new QDoubleSpinBox;
-    m_di04GraceSpin->setRange(0.0, 60.0);
     m_di04GraceSpin->setValue(5.0);
-    m_di04GraceSpin->setSuffix(" s");
-    graceRow->addWidget(graceLb);
-    graceRow->addWidget(m_di04GraceSpin, 1);
-    advV->addLayout(graceRow);
-
-    auto *platRow = new QHBoxLayout;
-    auto *platLb = new QLabel("平台采样");
-    platLb->setFixedWidth(56);
     m_plateauNSpin = new QSpinBox;
-    m_plateauNSpin->setRange(1, 20);
     m_plateauNSpin->setValue(5);
-    platRow->addWidget(platLb);
-    platRow->addWidget(m_plateauNSpin, 1);
-    advV->addLayout(platRow);
-
-    auto *advOuter = new QVBoxLayout(m_advOptionsGroup);
-    advOuter->setContentsMargins(4, 8, 4, 4);
-    advOuter->addWidget(m_advOptionsContent);
     m_advOptionsContent->setVisible(false);
-    connect(m_advOptionsGroup, &QGroupBox::toggled, m_advOptionsContent, &QWidget::setVisible);
-    v->addWidget(m_advOptionsGroup);
-    
-    // ④ 工作流按钮行：自检 + 完整工作流
-    auto *wfRow = new QHBoxLayout;
-    wfRow->setSpacing(kLayoutSpacing);
-    m_btnSelfTest = new QPushButton("\u4E0A\u7535\u81EA\u68C0");
-    connect(m_btnSelfTest, &QPushButton::clicked, this, &MainWindow::runSelfTest);
-    m_btnWorkflow = new QPushButton("\u5B8C\u6574\u5DE5\u4F5C\u6D41");
-    connect(m_btnWorkflow, &QPushButton::clicked, this, &MainWindow::runWorkflowFull);
-    styleUniformButtons({m_btnSelfTest, m_btnWorkflow}, 0);
-    wfRow->addWidget(m_btnSelfTest, 1);
-    wfRow->addWidget(m_btnWorkflow, 1);
-    v->addLayout(wfRow);
-    
+    m_advOptionsContent->setMaximumHeight(0);
+    v->addWidget(m_advOptionsContent);
+
     v->addStretch(1);
-    
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
+    return page;
 }
 
-QWidget *MainWindow::buildSafetyPanel() {
-    auto *gb = new QGroupBox("安全控制");
-    auto *v = new QVBoxLayout(gb);
-    compactGroupLayout(v);
-    v->setSpacing(kLayoutSpacing);
+QWidget *MainWindow::buildPageParameters() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
+    v->addWidget(makeSectionLabel(QStringLiteral("<b>实时参数</b>")));
 
-    m_btnEstop = new QPushButton("触发急停");
-    m_btnEstop->setObjectName("btnEstop");
-    connect(m_btnEstop, &QPushButton::clicked, this, &MainWindow::emergencyStop);
+    auto *form = new QFormLayout;
+    form->setSpacing(12);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    auto addRow = [&](const QString &name, QLabel *&out, const QString &unit) {
+        auto *nameLb = new QLabel(name);
+        nameLb->setProperty("class", "paramNameLarge");
+        nameLb->setStyleSheet("color:#9090a8; font-size:12pt;");
+        out = new QLabel(QStringLiteral("—"));
+        out->setProperty("class", "paramValueLarge");
+        out->setStyleSheet("color:#f0f0f8; font-size:14pt; font-weight:bold;");
+        auto *unitLb = new QLabel(unit);
+        unitLb->setStyleSheet("color:#707080; font-size:12pt;");
+        auto *row = new QHBoxLayout;
+        row->addWidget(out);
+        row->addWidget(unitLb);
+        row->addStretch();
+        auto *wrap = new QWidget;
+        wrap->setLayout(row);
+        form->addRow(nameLb, wrap);
+    };
+    addRow(QStringLiteral("伺服角度"), m_labelServoAngle, QStringLiteral("°"));
+    addRow(QStringLiteral("ABS_01"), m_labelAbs01Angle, QStringLiteral("°"));
+    addRow(QStringLiteral("ABS_02"), m_labelAbs02Angle, QStringLiteral("°"));
+    addRow(QStringLiteral("当前速度"), m_labelCurrentSpeed, QStringLiteral("°/s"));
+    addRow(QStringLiteral("位置给定"), m_labelPositionSetpoint, QStringLiteral("°"));
+    addRow(QStringLiteral("速度给定"), m_labelSpeedSetpoint, QStringLiteral("°/s"));
+    addRow(QStringLiteral("伺服1扭矩"), m_labelServo1Torque, QStringLiteral("Nm"));
+    addRow(QStringLiteral("伺服2扭矩"), m_labelServo2Torque, QStringLiteral("Nm"));
+    addRow(QStringLiteral("串动1"), m_labelSlip1, QStringLiteral("mm"));
+    addRow(QStringLiteral("串动2"), m_labelSlip2, QStringLiteral("mm"));
+    addRow(QStringLiteral("剪切力"), m_labelShearForce, QStringLiteral("kN"));
+    addRow(QStringLiteral("急停过冲"), m_labelEstopOvershoot, QStringLiteral("°"));
 
-    m_btnBrakesClose = new QPushButton("关闭制动");
-    connect(m_btnBrakesClose, &QPushButton::clicked, this, &MainWindow::closeBrakes);
-
-    m_btnBrakesOpen = new QPushButton("打开制动");
-    connect(m_btnBrakesOpen, &QPushButton::clicked, this, &MainWindow::openBrakes);
-
-    m_btnEstopRecover = new QPushButton(QStringLiteral("\u6025\u505C\u6062\u590D"));
-    m_btnEstopRecover->setToolTip(QStringLiteral("\u663E\u793A\u5F53\u524D\u6025\u505C\u72B6\u6001\u5E76\u63D0\u4F9B\u6062\u590D\u64CD\u4F5C"));
-    connect(m_btnEstopRecover, &QPushButton::clicked, this, &MainWindow::recoverEstop);
-
-    styleSafetyButtons({m_btnEstop, m_btnBrakesClose, m_btnBrakesOpen, m_btnEstopRecover});
-
+    v->addLayout(form);
     v->addStretch(1);
-    v->addWidget(m_btnEstop);
-    v->addStretch(1);
-    v->addWidget(m_btnBrakesClose);
-    v->addStretch(1);
-    v->addWidget(m_btnBrakesOpen);
-    v->addStretch(1);
-    v->addWidget(m_btnEstopRecover);
-    v->addStretch(1);
-
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
+    return page;
 }
 
-// ============================================================================
-// 5. 底部 — 角度曲线（左）+ 通信日志（右）
-// ============================================================================
-
-QWidget *MainWindow::buildChartPanel() {
-    auto *gb = new QGroupBox("角度实时曲线");
-    auto *l = new QVBoxLayout(gb);
-    l->setContentsMargins(6, 6, 6, 6);
-    l->setSpacing(4);
-
+void MainWindow::initChart() {
     m_angleSeries = new QLineSeries;
     m_angleSeries->setName("ABS_01 角度");
     m_angleSeries->setColor(QColor(60, 180, 255));
     m_angleSeries->setPen(QPen(QColor(60, 180, 255), 2));
-
     m_targetScatter = new QScatterSeries;
     m_targetScatter->setName("目标角度");
     m_targetScatter->setColor(QColor(255, 200, 60));
     m_targetScatter->setMarkerSize(8);
-
     m_chart = new QChart;
     m_chart->addSeries(m_angleSeries);
     m_chart->addSeries(m_targetScatter);
@@ -800,7 +715,6 @@ QWidget *MainWindow::buildChartPanel() {
     m_chart->setBackgroundBrush(QColor(24, 24, 30));
     m_chart->setPlotAreaBackgroundBrush(QColor(20, 20, 26));
     m_chart->setPlotAreaBackgroundVisible(true);
-
     m_timeAxis = new QDateTimeAxis;
     m_timeAxis->setFormat("HH:mm:ss");
     m_timeAxis->setLabelsColor(QColor(160, 160, 170));
@@ -808,98 +722,159 @@ QWidget *MainWindow::buildChartPanel() {
     m_chart->addAxis(m_timeAxis, Qt::AlignBottom);
     m_angleSeries->attachAxis(m_timeAxis);
     m_targetScatter->attachAxis(m_timeAxis);
-
     m_angleAxis = new QValueAxis;
-    m_angleAxis->setRange(ModbusAddr::CHART_ANGLE_AXIS_MIN,
-                          ModbusAddr::CHART_ANGLE_AXIS_MAX);
+    m_angleAxis->setRange(ModbusAddr::CHART_ANGLE_AXIS_MIN, ModbusAddr::CHART_ANGLE_AXIS_MAX);
     m_angleAxis->setLabelsColor(QColor(160, 160, 170));
     m_angleAxis->setGridLineColor(QColor(60, 60, 70));
     m_chart->addAxis(m_angleAxis, Qt::AlignLeft);
     m_angleSeries->attachAxis(m_angleAxis);
     m_targetScatter->attachAxis(m_angleAxis);
+}
 
+QWidget *MainWindow::buildPageChart() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setSpacing(kCompactSpacing);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
+    initChart();
     m_chartView = new QChartView(m_chart);
     m_chartView->setRenderHint(QPainter::Antialiasing);
-    m_chartView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    l->addWidget(m_chartView);
-
-    // 时间窗口选择 + 导出按钮
-    auto *chartBar = new QHBoxLayout;
-    chartBar->setSpacing(kLayoutSpacing);
-    auto *winLb = new QLabel(QStringLiteral("\u7A97\u53E3"));
-    winLb->setFixedWidth(28);
+    v->addWidget(m_chartView, 1);
+    auto *bar = new QHBoxLayout;
+    bar->addWidget(new QLabel(QStringLiteral("时间窗口")));
     m_chartWindowCombo = new QComboBox;
     m_chartWindowCombo->addItems({QStringLiteral("30s"), QStringLiteral("1min"),
                                   QStringLiteral("2min"), QStringLiteral("5min")});
-    m_chartWindowCombo->setFixedWidth(64);
-    auto *btnPng = new QPushButton(QStringLiteral("\u622A\u56FE"));
-    btnPng->setFixedWidth(kBtnMinWidth);
+    bar->addWidget(m_chartWindowCombo);
+    bar->addStretch();
+    auto *btnPng = new QPushButton(QStringLiteral("截图"));
     connect(btnPng, &QPushButton::clicked, this, &MainWindow::exportChartPng);
-    auto *btnCsv = new QPushButton(QStringLiteral("CSV"));
-    btnCsv->setFixedWidth(kBtnMinWidth);
+    auto *btnCsv = new QPushButton(QStringLiteral("CSV导出"));
     connect(btnCsv, &QPushButton::clicked, this, &MainWindow::exportChartCsv);
-    chartBar->addWidget(winLb);
-    chartBar->addWidget(m_chartWindowCombo);
-    chartBar->addStretch(1);
-    chartBar->addWidget(btnPng);
-    chartBar->addWidget(btnCsv);
-    l->addLayout(chartBar);
-
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
+    bar->addWidget(btnPng);
+    bar->addWidget(btnCsv);
+    v->addLayout(bar);
+    return page;
 }
 
-QWidget *MainWindow::buildLogPanel() {
-    auto *gb = new QGroupBox("通信日志");
-    auto *l = new QVBoxLayout(gb);
-    l->setContentsMargins(6, 6, 6, 6);
-    l->setSpacing(4);
+QWidget *MainWindow::buildPageLog() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setSpacing(kCompactSpacing);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
 
     m_logTable = new QTableWidget(0, 3);
-    m_logTable->setHorizontalHeaderLabels({"日期", "时间", "日志详情"});
+    m_logTable->setHorizontalHeaderLabels({QStringLiteral("日期"), QStringLiteral("时间"),
+                                           QStringLiteral("日志详情")});
     m_logTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_logTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_logTable->verticalHeader()->setVisible(false);
     m_logTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_logTable->setShowGrid(true);
     m_logTable->setStyleSheet(
-        "QTableWidget {"
-        "  background-color:#2C2C34; color:#FFFFFF;"
-        "  border:1px solid #44444E; border-radius:4px;"
-        "  gridline-color:#3E3E46;"
-        "  font-family:\"Consolas\",\"Courier New\",monospace; font-size:9pt;"
-        "}"
-        "QHeaderView::section {"
-        "  background-color:#1E2A3A; color:#FFFFFF;"
-        "  border:1px solid #3A4A5A; padding:4px 8px;"
-        "  font-weight:bold; font-size:9pt;"
-        "}"
-        "QTableWidget::item { padding:2px 6px; color:#FFFFFF; }"
-        "QTableWidget::item:selected { background-color:#3A5A8A; color:#FFFFFF; }"
-    );
-    m_logTable->setColumnWidth(0, 88);
-    m_logTable->setColumnWidth(1, 96);
+        "QTableWidget { background-color:#2C2C34; color:#FFFFFF;"
+        "  border:1px solid #44444E; gridline-color:#3E3E46;"
+        "  font-family:Consolas,monospace; font-size:9pt; }"
+        "QHeaderView::section { background-color:#1E2A3A; color:#FFFFFF;"
+        "  border:1px solid #3A4A5A; padding:4px 8px; font-weight:bold; }"
+        "QTableWidget::item { padding:2px 6px; }"
+        "QTableWidget::item:selected { background-color:#3A5A8A; }");
+    m_logTable->setColumnWidth(0, 100);
+    m_logTable->setColumnWidth(1, 110);
     m_logTable->horizontalHeader()->setStretchLastSection(true);
-    m_logTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    l->addWidget(m_logTable, 1);
+    v->addWidget(m_logTable, 1);
 
     auto *btnBar = new QHBoxLayout;
-    btnBar->setContentsMargins(0, 2, 0, 0);
-    auto *btnCl = new QPushButton("清空");
-    btnCl->setFixedWidth(kBtnMinWidth);
-    connect(btnCl, &QPushButton::clicked, this, [this]() { m_logTable->setRowCount(0); });
-    auto *btnLogCsv = new QPushButton("导出CSV");
-    btnLogCsv->setFixedWidth(kBtnMinWidth + 16);
-    connect(btnLogCsv, &QPushButton::clicked, this, &MainWindow::exportLogCsv);
-    btnBar->addWidget(btnLogCsv, 0, Qt::AlignRight);
-    btnBar->addWidget(btnCl, 0, Qt::AlignRight);
-    l->addLayout(btnBar);
-
-    gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    return gb;
+    btnBar->addStretch();
+    auto *btnCsv = new QPushButton(QStringLiteral("导出 CSV"));
+    connect(btnCsv, &QPushButton::clicked, this, &MainWindow::exportLogCsv);
+    auto *btnCl = new QPushButton(QStringLiteral("清空"));
+    connect(btnCl, &QPushButton::clicked, this, [this]() {
+        if (m_logTable) m_logTable->setRowCount(0);
+    });
+    btnBar->addWidget(btnCsv);
+    btnBar->addWidget(btnCl);
+    v->addLayout(btnBar);
+    return page;
 }
 
-// ============================================================================
+QWidget *MainWindow::buildPageStatus() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
+    v->addWidget(makeSectionLabel(QStringLiteral("<b>系统状态</b>")));
+
+    auto *grid = new QGridLayout;
+    grid->setSpacing(8);
+    int idx = 0;
+    auto addSt = [&](const QString &lb, const QString &tip = QString()) {
+        auto &item = m_statusLeds[idx++];
+        item = makeLed(lb, 9);
+        auto *cell = new QWidget;
+        auto *hl = new QHBoxLayout(cell);
+        hl->setSpacing(6);
+        hl->addWidget(item.dot);
+        hl->addWidget(item.text, 1);
+        if (!tip.isEmpty()) {
+            cell->setToolTip(tip);
+            item.dot->setToolTip(tip);
+            item.text->setToolTip(tip);
+        }
+        grid->addWidget(cell, (idx - 1) / kLedGridColsStatus, (idx - 1) % kLedGridColsStatus);
+    };
+    addSt("自动模式");
+    addSt("手动模式");
+    addSt("速度模式");
+    addSt("寻零运行");
+    addSt("位置运行");
+    addSt("电机运行");
+    addSt("寻零完成");
+    addSt("急停正常");
+    addSt("安全继电器");
+    addSt("气压正常");
+    addSt("制动器关闭");
+    addSt("零位开关");
+    addSt("+185°极限");
+    addSt("-185°极限");
+    addSt("正极限未触发");
+    addSt("负极限未触发");
+    addSt("角度未超范围");
+    addSt("目标未超范围");
+    addSt("伺服无故障");
+    for (int i = 0; i < 6; ++i)
+        addSt(QStringLiteral("制动%1关闭").arg(i + 1));
+    addSt("运动允许");
+    addSt(kBeamPermitLedLabel, kBeamPermitLedTooltip);
+
+    v->addLayout(grid);
+    v->addStretch(1);
+    return page;
+}
+
+QWidget *MainWindow::buildPageAbout() {
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(kContentMargin, kContentMargin, kContentMargin, kContentMargin);
+    v->addStretch(2);
+
+    auto *title = new QLabel(QStringLiteral("PGM 旋转机架控制系统 v1.0"));
+    title->setAlignment(Qt::AlignCenter);
+    title->setStyleSheet("color:#e8ecf4; font-size:18pt; font-weight:bold;");
+    v->addWidget(title);
+
+    auto *sub = new QLabel(QStringLiteral("Proton Gantry HTTP REST 上位机"));
+    sub->setAlignment(Qt::AlignCenter);
+    sub->setStyleSheet("color:#8090a8; font-size:11pt;");
+    v->addWidget(sub);
+
+    v->addSpacing(16);
+    m_aboutConnLabel = new QLabel(QStringLiteral("当前连接：未连接"));
+    m_aboutConnLabel->setAlignment(Qt::AlignCenter);
+    m_aboutConnLabel->setStyleSheet("color:#a0a8b8; font-size:11pt;");
+    v->addWidget(m_aboutConnLabel);
+
+    v->addStretch(3);
+    return page;
+}
 // 日志行
 // ============================================================================
 
@@ -1056,6 +1031,7 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
         m_ledBeamPermit.text->setToolTip(kBeamPermitLedTooltip);
         m_ledBeamPermit.dot->setToolTip(kBeamPermitLedTooltip);
     }
+    syncStatusPageLeds();
 }
 
 void MainWindow::updateMotionInhibitBar(const GantryStatus &s) {
@@ -1085,22 +1061,28 @@ void MainWindow::updateConnectionStatusDisplay() {
     if (!m_connStatusLamp || !m_connStatusLabel) return;
     if (!m_client.isConnected()) {
         m_connStatusLamp->setStyleSheet(
-            "background-color:#d04040; border-radius:7px; min-width:14px; min-height:14px;");
+            "background-color:#d04040; border-radius:6px; min-width:12px; min-height:12px;");
         m_connStatusLabel->setText(QStringLiteral("已断开"));
-        m_connStatusLabel->setStyleSheet("color:#d04040; font-weight:bold;");
-        return;
-    }
-    if (m_client.isPlcConnected()) {
-        m_connStatusLamp->setStyleSheet(
-            "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText(QStringLiteral("HTTP 已连接 | PLC 已连接"));
-        m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
+        m_connStatusLabel->setStyleSheet("color:#d04040; font-size:9pt; font-weight:bold;");
     } else {
         m_connStatusLamp->setStyleSheet(
-            "background-color:#d0a030; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText(QStringLiteral("HTTP 已连接 | PLC 未连接"));
-        m_connStatusLabel->setStyleSheet("color:#e0c040; font-weight:bold;");
+            "background-color:#30d050; border-radius:6px; min-width:12px; min-height:12px;");
+        m_connStatusLabel->setText(QStringLiteral("已连接"));
+        m_connStatusLabel->setStyleSheet("color:#30d050; font-size:9pt; font-weight:bold;");
     }
+    updateAboutConnectionText();
+}
+
+void MainWindow::updateAboutConnectionText() {
+    if (!m_aboutConnLabel) return;
+    if (!m_client.isConnected()) {
+        m_aboutConnLabel->setText(QStringLiteral("当前连接：未连接"));
+        return;
+    }
+    const QString host = m_hostEdit ? m_hostEdit->text().trimmed() : m_client.currentHost();
+    const QString port = m_portEdit ? m_portEdit->text().trimmed()
+                                    : QString::number(m_client.currentPort());
+    m_aboutConnLabel->setText(QStringLiteral("当前连接：%1:%2").arg(host, port));
 }
 
 void MainWindow::resetAllLeds() {
@@ -1129,6 +1111,8 @@ void MainWindow::resetAllLeds() {
     setLedColor(m_ledBeamPermit,    false);
     m_ledEstop.text->setText(QStringLiteral("急停正常"));
     m_ledBeamPermit.text->setText(kBeamPermitLedLabel);
+    for (auto &led : m_statusLeds)
+        setLedColor(led, false);
     if (m_gauge) {
         m_gauge->setAngle(0.0);
         m_gauge->setTargetAngle(std::numeric_limits<double>::quiet_NaN());
@@ -1145,23 +1129,29 @@ void MainWindow::updateAngleDisplay(const GantryStatus &s) {
 
 void MainWindow::updateParameterDisplay(const GantryStatus &s) {
     auto setVal = [](QLabel *lb, const QString &text) {
-        if (!lb) return;
-        lb->setText(lb->fontMetrics().elidedText(
-            text, Qt::ElideRight, lb->width() > 0 ? lb->width() : kParamValueColWidth));
+        if (lb) lb->setText(text);
+    };
+    auto fmtAngle = [](const std::optional<double> &v) -> QString {
+        if (!ModbusFloat::isDisplayableAngle(v)) return QStringLiteral("—");
+        return QString::number(*v, 'f', 2);
+    };
+    auto fmtNum = [](const std::optional<double> &v, int dec = 2) -> QString {
+        if (!ModbusFloat::isReasonableScalar(v)) return QStringLiteral("—");
+        return QString::number(*v, 'f', dec);
     };
     if (!m_labelServoAngle) return;
-    setVal(m_labelServoAngle,        ModbusFloat::formatAngleDegUi(s.servoAngleDeg));
-    setVal(m_labelAbs01Angle,        ModbusFloat::formatAngleDegUi(s.abs01AngleDeg));
-    setVal(m_labelAbs02Angle,        ModbusFloat::formatAngleDegUi(s.abs02AngleDeg));
-    setVal(m_labelCurrentSpeed,      ModbusFloat::formatScalarUi(s.servoCurrentSpeed, 2));
-    setVal(m_labelPositionSetpoint,  ModbusFloat::formatAngleDegUi(s.positionSetpoint));
-    setVal(m_labelSpeedSetpoint,     ModbusFloat::formatScalarUi(s.speedSetpoint, 2));
-    setVal(m_labelServo1Torque,      ModbusFloat::formatScalarUi(s.servo1Torque, 2));
-    setVal(m_labelServo2Torque,      ModbusFloat::formatScalarUi(s.servo2Torque, 2));
-    setVal(m_labelSlip1,             ModbusFloat::formatScalarUi(s.axialSlip1, 2));
-    setVal(m_labelSlip2,             ModbusFloat::formatScalarUi(s.axialSlip2, 2));
-    setVal(m_labelShearForce,        ModbusFloat::formatScalarUi(s.shearForce, 2));
-    setVal(m_labelEstopOvershoot,    ModbusFloat::formatAngleDegUi(s.estopOvershoot));
+    setVal(m_labelServoAngle,       fmtAngle(s.servoAngleDeg));
+    setVal(m_labelAbs01Angle,       fmtAngle(s.abs01AngleDeg));
+    setVal(m_labelAbs02Angle,       fmtAngle(s.abs02AngleDeg));
+    setVal(m_labelCurrentSpeed,     fmtNum(s.servoCurrentSpeed));
+    setVal(m_labelPositionSetpoint, fmtAngle(s.positionSetpoint));
+    setVal(m_labelSpeedSetpoint,    fmtNum(s.speedSetpoint));
+    setVal(m_labelServo1Torque,     fmtNum(s.servo1Torque));
+    setVal(m_labelServo2Torque,     fmtNum(s.servo2Torque));
+    setVal(m_labelSlip1,            fmtNum(s.axialSlip1));
+    setVal(m_labelSlip2,            fmtNum(s.axialSlip2));
+    setVal(m_labelShearForce,       fmtNum(s.shearForce));
+    setVal(m_labelEstopOvershoot,   fmtAngle(s.estopOvershoot));
 }
 
 void MainWindow::updateChart(double angle) {
@@ -1548,9 +1538,6 @@ void MainWindow::loadSettings() {
     if (m_autoModeCheck) m_autoModeCheck->setChecked(s.value(QStringLiteral("auto_mode"), true).toBool());
     if (m_di04GraceSpin) m_di04GraceSpin->setValue(s.value(QStringLiteral("di04_grace"), 5.0).toDouble());
     if (m_plateauNSpin) m_plateauNSpin->setValue(s.value(QStringLiteral("plateau_n"), 5).toInt());
-    if (m_advOptionsGroup) m_advOptionsGroup->setChecked(s.value(QStringLiteral("adv_expanded"), false).toBool());
-    if (m_advOptionsGroup && m_advOptionsContent)
-        m_advOptionsContent->setVisible(m_advOptionsGroup->isChecked());
 }
 
 void MainWindow::saveSettings() {
@@ -1569,7 +1556,6 @@ void MainWindow::saveSettings() {
     if (m_autoModeCheck) s.setValue(QStringLiteral("auto_mode"), m_autoModeCheck->isChecked());
     if (m_di04GraceSpin) s.setValue(QStringLiteral("di04_grace"), m_di04GraceSpin->value());
     if (m_plateauNSpin) s.setValue(QStringLiteral("plateau_n"), m_plateauNSpin->value());
-    if (m_advOptionsGroup) s.setValue(QStringLiteral("adv_expanded"), m_advOptionsGroup->isChecked());
 }
 
 bool MainWindow::showWorkflowDialog(QList<double> &anglesOut, WorkflowFullOptions &optsOut) {
