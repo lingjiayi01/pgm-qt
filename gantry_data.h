@@ -296,7 +296,123 @@ struct GantryStatus {
             return *tcsMotionInhibit;
         return motionInhibit();
     }
+
+    bool servoFaultActive() const {
+        if (rawDiscreteBits.size() > 65) {
+            for (int i = 61; i <= 65; ++i)
+                if (i < (int)rawDiscreteBits.size() && rawDiscreteBits[i])
+                    return true;
+        }
+        return false;
+    }
 };
+
+inline QString describeMotionInhibitReason(const GantryStatus &s) {
+    QStringList parts;
+    const QString estop = s.estopLabels();
+    if (!estop.isEmpty())
+        parts << QStringLiteral("急停(%1)").arg(estop);
+    if (s.safetyRelayNotReady)
+        parts << QStringLiteral("安全继电器未就绪");
+    if (!(s.air1PressureOk && s.air2PressureOk))
+        parts << QStringLiteral("主进气压力异常(00017/18)");
+    if (s.air1Low || s.air2Low)
+        parts << QStringLiteral("气压低(40/41)");
+    if (!s.limitPos185Ok || !s.limitNeg185Ok)
+        parts << QStringLiteral("±185°极限异常");
+    if (s.atPosLimit || s.atNegLimit)
+        parts << QStringLiteral("正负极限位");
+    if (s.angleOutOfRange || s.targetAngleOutOfRange)
+        parts << QStringLiteral("角度超范围");
+    if (s.servoFaultActive())
+        parts << QStringLiteral("伺服/驱动故障位");
+    return parts.isEmpty() ? QStringLiteral("未知") : parts.join(QStringLiteral("+"));
+}
+
+struct MotionPositionOptions {
+    double tol = 0.5;
+    QString arrivalMode = QStringLiteral("hybrid");
+    bool requireHoming = true;
+    bool autoMode = true;
+    double di04Grace = 5.0;
+    int plateauN = 5;
+};
+
+struct WorkflowFullOptions {
+    double speed = 5.0;
+    double tol = 0.5;
+    double timeout = 300.0;
+    bool skipSelfTest = false;
+    bool resetOnFail = false;
+    QString arrivalMode = QStringLiteral("hybrid");
+    double di04Grace = 5.0;
+    int plateauN = 5;
+};
+
+inline QString discreteInputLabel(int index) {
+    switch (index) {
+    case 0: return QStringLiteral("自动模式");
+    case 1: return QStringLiteral("手动模式");
+    case 2: return QStringLiteral("速度模式");
+    case 3: return QStringLiteral("寻零运行");
+    case 4: return QStringLiteral("位置运行");
+    case 5: return QStringLiteral("寻零完成");
+    case 6: return QStringLiteral("电机运行");
+    case 10: return QStringLiteral("制动汇总指示");
+    case 11: return QStringLiteral("制动1打开");
+    case 12: return QStringLiteral("制动2打开");
+    case 13: return QStringLiteral("制动3打开");
+    case 14: return QStringLiteral("制动4打开");
+    case 15: return QStringLiteral("制动5打开");
+    case 16: return QStringLiteral("制动6打开");
+    case 17: return QStringLiteral("气控1压力正常");
+    case 18: return QStringLiteral("气控2压力正常");
+    case 19: return QStringLiteral("零位开关");
+    case 20: return QStringLiteral("+185°极限正常");
+    case 21: return QStringLiteral("-185°极限正常");
+    case 33: return QStringLiteral("PLC急停");
+    case 34: return QStringLiteral("急停1");
+    case 35: return QStringLiteral("急停2");
+    case 36: return QStringLiteral("急停3");
+    case 37: return QStringLiteral("安全继电器未就绪");
+    case 38: return QStringLiteral("正极限位");
+    case 39: return QStringLiteral("负极限位");
+    case 40: return QStringLiteral("气控1气压低");
+    case 41: return QStringLiteral("气控2气压低");
+    case 42: return QStringLiteral("角度超范围");
+    case 43: return QStringLiteral("目标角度超范围");
+    case 61: return QStringLiteral("伺服故障1");
+    case 62: return QStringLiteral("伺服故障2");
+    case 63: return QStringLiteral("伺服故障3");
+    case 64: return QStringLiteral("伺服故障4");
+    case 65: return QStringLiteral("伺服故障5");
+    default: break;
+    }
+    return QStringLiteral("DI %1").arg(index, 5, 10, QChar('0'));
+}
+
+inline bool isDiscreteAlertBit(int index) {
+    if (index >= 33 && index <= 36) return true;
+    if (index == 20 || index == 21) return false; // 1=正常，在监视里按语义着色
+    if (index == 38 || index == 39) return true;
+    if (index == 42 || index == 43) return true;
+    if (index >= 61 && index <= 65) return true;
+    return false;
+}
+
+inline QString apiPathToCommandId(const QString &path) {
+    if (path == QStringLiteral("motion/home")) return QStringLiteral("home");
+    if (path == QStringLiteral("motion/jog")) return QStringLiteral("jog");
+    if (path == QStringLiteral("motion/position")) return QStringLiteral("position");
+    if (path == QStringLiteral("motion/stop")) return QStringLiteral("stop");
+    if (path == QStringLiteral("motion/estop")) return QStringLiteral("estop");
+    if (path == QStringLiteral("workflow/self-test")) return QStringLiteral("self-test");
+    if (path == QStringLiteral("workflow/full")) return QStringLiteral("full");
+    if (path == QStringLiteral("verify")) return QStringLiteral("verify");
+    if (path.endsWith(QStringLiteral("/auto"))) return QStringLiteral("auto_mode");
+    if (path.endsWith(QStringLiteral("/manual"))) return QStringLiteral("manual_mode");
+    return path.section('/', -1);
+}
 
 // ============================================================================
 // HTTP API 响应解析
@@ -332,6 +448,9 @@ struct TcsResponse {
     QString cmd;
     QString requestId;
     QString error;
+    QString errorCode;
+    QStringList failures;
+    bool commandSuccess = false;
     bool pong = false;
     bool motionComplete = false;
     QString motionDetail;
@@ -340,6 +459,7 @@ struct TcsResponse {
     bool beamPermit = false;
     QString beamPermitReason;
     QJsonObject tcsSnapshot;
+    QJsonObject rawData;
 };
 
 // 将 tcs-serve / API tcs_snapshot 转为 GantryStatus
@@ -480,11 +600,21 @@ inline TcsResponse apiResponseToCommandResponse(const ApiResponse &api, const QS
     r.ok = api.ok;
     r.cmd = cmd;
     r.error = api.error;
-    if (!api.ok)
+    r.errorCode = api.errorCode;
+    r.rawData = api.data;
+    const QJsonArray failArr = api.data.value(QStringLiteral("failures")).toArray();
+    for (const auto &v : failArr)
+        r.failures.append(v.toString());
+    if (!api.ok) {
+        if (r.failures.isEmpty() && cmd == QStringLiteral("self-test") && !api.error.isEmpty()) {
+            for (const QString &part : api.error.split(';', Qt::SkipEmptyParts))
+                r.failures.append(part.trimmed());
+        }
         return r;
+    }
     const QJsonObject d = api.data;
-    r.motionComplete = d.value(QStringLiteral("success")).toBool(
-        d.value(QStringLiteral("motion_complete")).toBool(false));
+    r.commandSuccess = d.value(QStringLiteral("success")).toBool(true);
+    r.motionComplete = r.commandSuccess || d.value(QStringLiteral("motion_complete")).toBool(false);
     r.motionDetail = d.value(QStringLiteral("detail")).toString(
         d.value(QStringLiteral("motion_detail")).toString());
     r.targetDeg = d.value(QStringLiteral("target_deg")).toDouble(0.0);

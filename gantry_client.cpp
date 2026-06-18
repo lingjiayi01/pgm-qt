@@ -28,15 +28,13 @@ GantryClient::~GantryClient() {
 // ============================================================================
 
 void GantryClient::get(const QString &path, const QString &logTag,
-                       ResponseHandler handler) {
+                       ResponseHandler handler, int timeoutMs) {
     if (!m_nam) return;
     QUrl url(m_baseUrl + path);
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    req.setTransferTimeout(kPollTimeoutMs);
+    req.setTransferTimeout(timeoutMs);
 
-    // 轮询请求不打日志，避免刷屏
-    // emitLog(QString("GET %1").arg(path));
     QNetworkReply *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler]() {
         const QByteArray body = reply->readAll();
@@ -55,14 +53,23 @@ void GantryClient::get(const QString &path, const QString &logTag,
             return;
         }
         m_consecutivePollFailures = 0;
-        // 轮询返回的 ok 信息不必打印，已在上层注释 GET 日志
-        // emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
         if (!api.ok && !api.error.isEmpty())
             emitLog(QString("  错误: %1 [%2]").arg(api.error, api.errorCode));
         if (handler)
             handler(api);
         reply->deleteLater();
     });
+}
+
+QString GantryClient::apiRelativePath(const QString &fullPath) const {
+    QString p = fullPath;
+    if (p.startsWith(QStringLiteral("/api/v1/")))
+        p = p.mid(8);
+    return p;
+}
+
+void GantryClient::emitCommandResponse(const ApiResponse &api, const QString &relativePath) {
+    emit commandResponse(apiResponseToCommandResponse(api, apiPathToCommandId(relativePath)));
 }
 
 void GantryClient::post(const QString &path, const QJsonObject &body,
@@ -75,33 +82,32 @@ void GantryClient::post(const QString &path, const QJsonObject &body,
     QUrl url(m_baseUrl + path);
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    const bool isMotion = path.contains(QStringLiteral("/motion/"))
-        || path.contains(QStringLiteral("/workflow/"));
+    const QString rel = apiRelativePath(path);
+    const bool isMotion = rel.startsWith(QStringLiteral("motion/"))
+        || rel.startsWith(QStringLiteral("workflow/"));
     req.setTransferTimeout(isMotion ? kMotionTimeoutMs : kConnectTimeoutMs);
 
     const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
-    emitLog(QString("POST %1 %2").arg(path, QString::fromUtf8(payload)));
+    emitLog(QString("POST %1 %2").arg(rel, QString::fromUtf8(payload)));
     QNetworkReply *reply = m_nam->post(req, payload);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler, path]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler, rel, isMotion]() {
         const QByteArray respBody = reply->readAll();
         ApiResponse api = parseApiResponse(respBody);
         if (reply->error() != QNetworkReply::NoError && respBody.isEmpty()) {
             const QString err = QString("%1: %2").arg(logTag, reply->errorString());
             emitLog(err);
             emit communicationError(err);
+            if (isMotion && m_motionInProgress)
+                setMotionInProgress(false);
             reply->deleteLater();
             return;
         }
-        // POST 成功/失败信息保留（非轮询，数量少）
         emitLog(QString("%1 ← ok=%2").arg(logTag).arg(api.ok ? "true" : "false"));
         if (!api.ok && !api.error.isEmpty())
             emitLog(QString("  错误: %1 [%2]").arg(api.error, api.errorCode));
         if (handler)
             handler(api);
-        QString cmd = path.section('/', -1);
-        if (path.contains(QStringLiteral("/mode/")))
-            cmd = path.section('/', -2).section('/', -1) + QStringLiteral("_mode");
-        emit commandResponse(apiResponseToCommandResponse(api, cmd));
+        emitCommandResponse(api, rel);
         reply->deleteLater();
     });
 }
@@ -117,12 +123,33 @@ void GantryClient::emitLog(const QString &msg) {
         .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), msg));
 }
 
+void GantryClient::setPlcConnected(bool connected) {
+    if (m_plcConnected == connected) return;
+    m_plcConnected = connected;
+    emit plcConnectionChanged(connected);
+}
+
 void GantryClient::markDisconnected(const QString &reason) {
     if (!m_connected) return;
     m_connected = false;
+    setPlcConnected(false);
     if (!reason.isEmpty())
         emitLog(reason);
+    if (m_motionInProgress)
+        setMotionInProgress(false);
     emit disconnected();
+}
+
+void GantryClient::finishConnectProbe(const ApiResponse &statusApi) {
+    m_connected = true;
+    emitLog(QString("HTTP 已连接 %1").arg(m_baseUrl));
+    if (!statusApi.ok && statusApi.errorCode == QStringLiteral("NOT_CONNECTED"))
+        setPlcConnected(false);
+    if (statusApi.ok)
+        applyStatusData(statusApi.data);
+    else if (!statusApi.error.isEmpty())
+        emit communicationError(statusApi.error);
+    emit connected();
 }
 
 // ============================================================================
@@ -136,27 +163,32 @@ void GantryClient::connectToBackend(const QString &host, quint16 port) {
     m_baseUrl = QString("http://%1:%2").arg(m_host).arg(m_port);
 
     emitLog(QString("正在连接后端 %1...").arg(m_baseUrl));
-    get(QStringLiteral("/api/v1/status"), QStringLiteral("连接探测"),
-        [this](const ApiResponse &api) {
-            if (api.timestamp.isEmpty() && api.error.isEmpty() && !api.ok) {
-                emit communicationError(QStringLiteral("后端不可达"));
+    get(QStringLiteral("/api/v1/health"), QStringLiteral("健康检查"),
+        [this](const ApiResponse &healthApi) {
+            if (!healthApi.ok) {
+                emit communicationError(healthApi.error.isEmpty()
+                    ? QStringLiteral("后端不可达") : healthApi.error);
                 emitLog("连接失败");
                 return;
             }
-            m_connected = true;
-            emitLog(QString("HTTP 已连接 %1").arg(m_baseUrl));
-            if (api.ok)
-                applyStatusData(api.data);
-            else if (!api.error.isEmpty())
-                emit communicationError(api.error);
-            emit connected();
-        });
+            setPlcConnected(healthApi.data.value(QStringLiteral("plc_connected")).toBool(false));
+            get(QStringLiteral("/api/v1/status"), QStringLiteral("连接探测"),
+                [this](const ApiResponse &statusApi) {
+                    if (statusApi.timestamp.isEmpty() && statusApi.error.isEmpty() && !statusApi.ok) {
+                        emit communicationError(QStringLiteral("状态接口不可达"));
+                        emitLog("连接失败");
+                        return;
+                    }
+                    finishConnectProbe(statusApi);
+                }, kConnectTimeoutMs);
+        }, kConnectTimeoutMs);
 }
 
 void GantryClient::disconnect() {
     const bool wasConnected = m_connected;
     m_connected = false;
     m_baseUrl.clear();
+    setPlcConnected(false);
     if (wasConnected) {
         emitLog("已断开");
         emit disconnected();
@@ -173,9 +205,10 @@ void GantryClient::pollStatus() {
         [this](const ApiResponse &api) {
             if (!api.ok) {
                 if (api.errorCode == QStringLiteral("NOT_CONNECTED"))
-                    markDisconnected(QStringLiteral("后端 PLC 未连接"));
+                    setPlcConnected(false);
                 return;
             }
+            setPlcConnected(true);
             applyStatusData(api.data);
         });
 }
@@ -186,6 +219,14 @@ void GantryClient::requestSnapshot() {
 
 void GantryClient::sendPing() {
     requestSnapshot();
+}
+
+void GantryClient::runPointTableVerify() {
+    if (!m_connected) return;
+    get(QStringLiteral("/api/v1/verify"), QStringLiteral("点表巡检"),
+        [this](const ApiResponse &api) {
+            emitCommandResponse(api, QStringLiteral("verify"));
+        }, kMotionTimeoutMs);
 }
 
 // ============================================================================
@@ -243,11 +284,18 @@ void GantryClient::manualJog(bool forward, double speed, double seconds) {
          });
 }
 
-void GantryClient::moveToPosition(double angleDeg, double speed, double timeoutSec) {
+void GantryClient::moveToPosition(double angleDeg, double speed, double timeoutSec,
+                                   const MotionPositionOptions &opts) {
     QJsonObject body;
     body[QStringLiteral("angle")] = angleDeg;
     body[QStringLiteral("speed")] = speed;
     body[QStringLiteral("timeout")] = timeoutSec;
+    body[QStringLiteral("tol")] = opts.tol;
+    body[QStringLiteral("arrival_mode")] = opts.arrivalMode;
+    body[QStringLiteral("require_homing")] = opts.requireHoming;
+    body[QStringLiteral("auto_mode")] = opts.autoMode;
+    body[QStringLiteral("di04_grace")] = opts.di04Grace;
+    body[QStringLiteral("plateau_n")] = opts.plateauN;
     setMotionInProgress(true);
     post(QStringLiteral("/api/v1/motion/position"), body,
          QStringLiteral("定角运动"), [this](const ApiResponse &api) {
@@ -279,7 +327,6 @@ void GantryClient::recoverEstop(int channel) {
         post(QStringLiteral("/api/v1/safety/estop2-recover"), QJsonObject(),
              QStringLiteral("急停恢复"), nullptr);
     } else {
-        // 其它通道暂无专用 API，先发故障复位作为替代
         emitLog(QStringLiteral("急停%1恢复: 先发故障复位脉冲").arg(channel));
         post(QStringLiteral("/api/v1/safety/reset"), QJsonObject(),
              QStringLiteral("故障复位(急停恢复)"), nullptr);
@@ -287,19 +334,27 @@ void GantryClient::recoverEstop(int channel) {
 }
 
 void GantryClient::runSelfTest() {
+    setMotionInProgress(true);
     post(QStringLiteral("/api/v1/workflow/self-test"), QJsonObject(),
-         QStringLiteral("上电自检"), nullptr);
+         QStringLiteral("上电自检"), [this](const ApiResponse &) {
+             setMotionInProgress(false);
+         });
 }
 
-void GantryClient::runWorkflowFull(const QList<double> &angles, double speed,
-                                     double tol, double timeout) {
+void GantryClient::runWorkflowFull(const QList<double> &angles,
+                                     const WorkflowFullOptions &opts) {
     QJsonObject body;
     QJsonArray arr;
     for (double a : angles) arr.append(a);
     body[QStringLiteral("angles")] = arr;
-    body[QStringLiteral("speed")] = speed;
-    body[QStringLiteral("tol")] = tol;
-    body[QStringLiteral("timeout")] = timeout;
+    body[QStringLiteral("speed")] = opts.speed;
+    body[QStringLiteral("tol")] = opts.tol;
+    body[QStringLiteral("timeout")] = opts.timeout;
+    body[QStringLiteral("skip_self_test")] = opts.skipSelfTest;
+    body[QStringLiteral("reset_on_fail")] = opts.resetOnFail;
+    body[QStringLiteral("arrival_mode")] = opts.arrivalMode;
+    body[QStringLiteral("di04_grace")] = opts.di04Grace;
+    body[QStringLiteral("plateau_n")] = opts.plateauN;
     setMotionInProgress(true);
     post(QStringLiteral("/api/v1/workflow/full"), body,
          QStringLiteral("完整工作流"), [this](const ApiResponse &) {

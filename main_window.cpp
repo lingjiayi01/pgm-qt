@@ -5,6 +5,12 @@
 #include <QMessageBox>
 #include <QFile>
 #include <QTextStream>
+#include <QSettings>
+#include <QScrollArea>
+#include <QDialogButtonBox>
+#include <QPlainTextEdit>
+#include <QJsonDocument>
+#include <QSet>
 #include <algorithm>
 #include <cmath>
 
@@ -23,7 +29,7 @@ constexpr int kSafetyBtnHeight = 32;
 constexpr int kParamValueColWidth = 80;
 constexpr int kGaugeMinSize = 200;
 
-constexpr int kStatusPanelMaxWidth = 172;
+constexpr int kStatusPanelMaxWidth = 200;
 
 const QString kBeamPermitLedLabel = QStringLiteral("可出束[软件占位]");
 const QString kBeamPermitLedTooltip = QStringLiteral(
@@ -133,25 +139,25 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setMinimumSize(1120, 720);
     setStyleSheet(kStyle);
     buildUi();
+    loadSettings();
 
     connect(&m_client, &GantryClient::connected, this, [this]() {
-        m_connStatusLamp->setStyleSheet(
-            "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText("已连接 (HTTP)");
-        m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
-        m_pollTimer.start(1000);  // 状态轮询 1s 一次, 降低后端日志量
+        updateConnectionStatusDisplay();
+        m_pollTimer.start(pollIntervalMs());
         updateControlsForConnectionMode();
-        onLogMessage("=== 已连接 ===");
+        onLogMessage("=== HTTP 已连接 ===");
+        saveSettings();
     });
     connect(&m_client, &GantryClient::disconnected, this, [this]() {
-        m_connStatusLamp->setStyleSheet(
-            "background-color:#d04040; border-radius:7px; min-width:14px; min-height:14px;");
-        m_connStatusLabel->setText("已断开");
-        m_connStatusLabel->setStyleSheet("color:#d04040; font-weight:bold;");
         m_pollTimer.stop();
+        updateConnectionStatusDisplay();
         resetAllLeds();
+        updateMotionInhibitBar(GantryStatus{});
         updateControlsForConnectionMode();
         onLogMessage("=== 已断开 ===");
+    });
+    connect(&m_client, &GantryClient::plcConnectionChanged, this, [this](bool) {
+        updateConnectionStatusDisplay();
     });
     connect(&m_client, &GantryClient::statusUpdated,
             this, &MainWindow::onStatusUpdated);
@@ -163,10 +169,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onConnectionError);
     connect(&m_pollTimer, &QTimer::timeout, this, [this]() {
         m_client.pollStatus();
+        const int ms = pollIntervalMs();
+        if (m_pollTimer.interval() != ms)
+            m_pollTimer.setInterval(ms);
     });
 
     connect(&m_client, &GantryClient::motionFinished, this, [this]() {
-        m_motionBusy = false;
         setMotionButtonsEnabled(true);
     });
 
@@ -174,6 +182,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+    saveSettings();
     m_pollTimer.stop();
     m_client.disconnect();
 }
@@ -192,6 +201,13 @@ void MainWindow::buildUi() {
 
     // 1. 顶部标题栏
     root->addWidget(buildTitleBar());
+
+    m_motionInhibitBar = new QLabel(QStringLiteral("运动允许"));
+    m_motionInhibitBar->setAlignment(Qt::AlignCenter);
+    m_motionInhibitBar->setStyleSheet(
+        "background-color:#1a3a1a; color:#80e080; font-weight:bold;"
+        "padding:4px 8px; border-radius:4px; font-size:9pt;");
+    root->addWidget(m_motionInhibitBar);
 
     // 上排四块：系统状态(窄列) | 表盘 | 实时参数 | 右侧控制(加宽)
     auto *upper = new QHBoxLayout;
@@ -295,9 +311,14 @@ void MainWindow::setLedColor(LedItem &led, bool on, bool running) {
 
 QWidget *MainWindow::buildStatusPanel() {
     auto *gb = new QGroupBox("系统状态");
-    auto *v = new QVBoxLayout(gb);
+    auto *scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *inner = new QWidget;
+    auto *v = new QVBoxLayout(inner);
     v->setSpacing(2);
-    v->setContentsMargins(4, 8, 4, 4);
+    v->setContentsMargins(2, 4, 2, 4);
 
     auto addLedRow = [&](LedItem &item, const QString &label,
                           const QString &tooltip = QString()) {
@@ -328,8 +349,25 @@ QWidget *MainWindow::buildStatusPanel() {
     addLedRow(m_ledSafety,        "安全继电器");
     addLedRow(m_ledAir,           "气压正常");
     addLedRow(m_ledBrakes,        "制动器关闭");
+    addLedRow(m_ledZeroSwitch,    "零位开关");
+    addLedRow(m_ledLimitPos185,   "+185°极限");
+    addLedRow(m_ledLimitNeg185,   "-185°极限");
+    addLedRow(m_ledAtPosLimit,    "正极限未触发");
+    addLedRow(m_ledAtNegLimit,    "负极限未触发");
+    addLedRow(m_ledAngleOut,      "角度未超范围");
+    addLedRow(m_ledTargetOut,     "目标未超范围");
+    addLedRow(m_ledServoFault,    "伺服无故障");
+    for (int i = 0; i < 6; ++i)
+        addLedRow(m_ledBrakeIndividual[i],
+                  QStringLiteral("制动%1关闭").arg(i + 1));
     addLedRow(m_ledMotionInhibit, "运动允许");
     addLedRow(m_ledBeamPermit, kBeamPermitLedLabel, kBeamPermitLedTooltip);
+
+    v->addStretch(1);
+    scroll->setWidget(inner);
+    auto *outer = new QVBoxLayout(gb);
+    outer->setContentsMargins(4, 8, 4, 4);
+    outer->addWidget(scroll);
 
     gb->setMaximumWidth(kStatusPanelMaxWidth);
     gb->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Expanding);
@@ -447,12 +485,12 @@ QWidget *MainWindow::buildConnectionPanel() {
 
     auto *actionRow = new QHBoxLayout;
     actionRow->setSpacing(kLayoutSpacing);
-    auto *btnC = new QPushButton("连接");
+    auto *btnC = new QPushButton("连接后端");
     btnC->setObjectName("btnConnect");
-    connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToPlc);
+    connect(btnC, &QPushButton::clicked, this, &MainWindow::connectToBackend);
     auto *btnD = new QPushButton("断开");
     btnD->setObjectName("btnDisconnect");
-    connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromPlc);
+    connect(btnD, &QPushButton::clicked, this, &MainWindow::disconnectFromBackend);
     styleUniformButtons({btnC, btnD}, 0);
     actionRow->addWidget(btnC, 1);
     actionRow->addWidget(btnD, 1);
@@ -466,6 +504,32 @@ QWidget *MainWindow::buildConnectionPanel() {
     actionRow->addWidget(m_connStatusLamp, 0, Qt::AlignVCenter);
     actionRow->addWidget(m_connStatusLabel, 1, Qt::AlignVCenter);
     v->addLayout(actionRow);
+
+    auto *engRow = new QHBoxLayout;
+    engRow->setSpacing(kLayoutSpacing);
+    m_btnVerify = new QPushButton("点表巡检");
+    connect(m_btnVerify, &QPushButton::clicked, this, &MainWindow::runPointTableVerify);
+    m_btnDiscrete = new QPushButton("离散量");
+    connect(m_btnDiscrete, &QPushButton::clicked, this, &MainWindow::showDiscreteMonitor);
+    styleUniformButtons({m_btnVerify, m_btnDiscrete}, 0);
+    engRow->addWidget(m_btnVerify, 1);
+    engRow->addWidget(m_btnDiscrete, 1);
+    v->addLayout(engRow);
+
+    auto *pollRow = new QHBoxLayout;
+    pollRow->setSpacing(kCompactSpacing);
+    auto *pollLb = new QLabel("轮询");
+    pollLb->setFixedWidth(36);
+    m_pollIntervalSpin = new QSpinBox;
+    m_pollIntervalSpin->setRange(300, 5000);
+    m_pollIntervalSpin->setValue(1000);
+    m_pollIntervalSpin->setSuffix(" ms");
+    m_pollIntervalSpin->setSingleStep(100);
+    connect(m_pollIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int) { saveSettings(); });
+    pollRow->addWidget(pollLb);
+    pollRow->addWidget(m_pollIntervalSpin, 1);
+    v->addLayout(pollRow);
     v->addStretch(1);
 
     gb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -586,6 +650,73 @@ QWidget *MainWindow::buildMotionPanel() {
     styleUniformButtons({btnMove}, 0);
     m_btnMove = btnMove;
     v->addWidget(btnMove);
+
+    // 高级选项（可折叠）
+    m_advOptionsGroup = new QGroupBox("高级选项");
+    m_advOptionsGroup->setCheckable(true);
+    m_advOptionsGroup->setChecked(false);
+    m_advOptionsContent = new QWidget;
+    auto *advV = new QVBoxLayout(m_advOptionsContent);
+    advV->setSpacing(kCompactSpacing);
+    advV->setContentsMargins(0, 0, 0, 0);
+
+    auto *tolRow = new QHBoxLayout;
+    auto *tolLb = new QLabel("容差");
+    tolLb->setFixedWidth(56);
+    m_tolSpin = new QDoubleSpinBox;
+    m_tolSpin->setRange(0.05, 5.0);
+    m_tolSpin->setValue(0.5);
+    m_tolSpin->setSuffix(" °");
+    m_tolSpin->setDecimals(2);
+    tolRow->addWidget(tolLb);
+    tolRow->addWidget(m_tolSpin, 1);
+    advV->addLayout(tolRow);
+
+    auto *arrRow = new QHBoxLayout;
+    auto *arrLb = new QLabel("到位模式");
+    arrLb->setFixedWidth(56);
+    m_arrivalModeCombo = new QComboBox;
+    m_arrivalModeCombo->addItem("hybrid", "hybrid");
+    m_arrivalModeCombo->addItem("strict_04", "strict_04");
+    m_arrivalModeCombo->addItem("angle", "angle");
+    arrRow->addWidget(arrLb);
+    arrRow->addWidget(m_arrivalModeCombo, 1);
+    advV->addLayout(arrRow);
+
+    m_requireHomingCheck = new QCheckBox("要求寻零完成");
+    m_requireHomingCheck->setChecked(true);
+    m_autoModeCheck = new QCheckBox("自动切换模式");
+    m_autoModeCheck->setChecked(true);
+    advV->addWidget(m_requireHomingCheck);
+    advV->addWidget(m_autoModeCheck);
+
+    auto *graceRow = new QHBoxLayout;
+    auto *graceLb = new QLabel("DI04宽限");
+    graceLb->setFixedWidth(56);
+    m_di04GraceSpin = new QDoubleSpinBox;
+    m_di04GraceSpin->setRange(0.0, 60.0);
+    m_di04GraceSpin->setValue(5.0);
+    m_di04GraceSpin->setSuffix(" s");
+    graceRow->addWidget(graceLb);
+    graceRow->addWidget(m_di04GraceSpin, 1);
+    advV->addLayout(graceRow);
+
+    auto *platRow = new QHBoxLayout;
+    auto *platLb = new QLabel("平台采样");
+    platLb->setFixedWidth(56);
+    m_plateauNSpin = new QSpinBox;
+    m_plateauNSpin->setRange(1, 20);
+    m_plateauNSpin->setValue(5);
+    platRow->addWidget(platLb);
+    platRow->addWidget(m_plateauNSpin, 1);
+    advV->addLayout(platRow);
+
+    auto *advOuter = new QVBoxLayout(m_advOptionsGroup);
+    advOuter->setContentsMargins(4, 8, 4, 4);
+    advOuter->addWidget(m_advOptionsContent);
+    m_advOptionsContent->setVisible(false);
+    connect(m_advOptionsGroup, &QGroupBox::toggled, m_advOptionsContent, &QWidget::setVisible);
+    v->addWidget(m_advOptionsGroup);
     
     // ④ 工作流按钮行：自检 + 完整工作流
     auto *wfRow = new QHBoxLayout;
@@ -757,6 +888,10 @@ QWidget *MainWindow::buildLogPanel() {
     auto *btnCl = new QPushButton("清空");
     btnCl->setFixedWidth(kBtnMinWidth);
     connect(btnCl, &QPushButton::clicked, this, [this]() { m_logTable->setRowCount(0); });
+    auto *btnLogCsv = new QPushButton("导出CSV");
+    btnLogCsv->setFixedWidth(kBtnMinWidth + 16);
+    connect(btnLogCsv, &QPushButton::clicked, this, &MainWindow::exportLogCsv);
+    btnBar->addWidget(btnLogCsv, 0, Qt::AlignRight);
     btnBar->addWidget(btnCl, 0, Qt::AlignRight);
     l->addLayout(btnBar);
 
@@ -852,6 +987,7 @@ void MainWindow::clearLastHighlight() {
 void MainWindow::onStatusUpdated(const GantryStatus &s) {
     m_currentStatus = s;
     updateStatusLeds(s);
+    updateMotionInhibitBar(s);
     updateAngleDisplay(s);
     updateParameterDisplay(s);
     updateChart(ModbusFloat::angleForDisplay(s.abs01AngleDeg));
@@ -873,12 +1009,39 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
     setLedColor(m_ledHomingDone,    s.homingDone);
     bool e = s.plcEstop || s.estop1 || s.estop2 || s.estop3;
     setLedColor(m_ledEstop,         !e);
+    if (e) {
+        QStringList ch;
+        if (s.plcEstop) ch << QStringLiteral("PLC(33)");
+        if (s.estop1) ch << QStringLiteral("E1(34)");
+        if (s.estop2) ch << QStringLiteral("E2(35)");
+        if (s.estop3) ch << QStringLiteral("E3(36)");
+        const QString tip = QStringLiteral("急停触发: %1").arg(ch.join(QStringLiteral("、")));
+        m_ledEstop.text->setText(QStringLiteral("急停触发"));
+        m_ledEstop.text->setToolTip(tip);
+        m_ledEstop.dot->setToolTip(tip);
+    } else {
+        m_ledEstop.text->setText(QStringLiteral("急停正常"));
+        m_ledEstop.text->setToolTip(QString());
+        m_ledEstop.dot->setToolTip(QString());
+    }
     setLedColor(m_ledSafety,        !s.safetyRelayNotReady);
     bool airOk = s.air1PressureOk && s.air2PressureOk && !s.air1Low && !s.air2Low;
     setLedColor(m_ledAir,           airOk);
     bool brakesClosed = s.brakesOpen.empty()
         || std::none_of(s.brakesOpen.begin(), s.brakesOpen.end(), [](bool o) { return o; });
     setLedColor(m_ledBrakes,        brakesClosed);
+    setLedColor(m_ledZeroSwitch,    s.zeroSwitch);
+    setLedColor(m_ledLimitPos185,   s.limitPos185Ok);
+    setLedColor(m_ledLimitNeg185,   s.limitNeg185Ok);
+    setLedColor(m_ledAtPosLimit,    !s.atPosLimit);
+    setLedColor(m_ledAtNegLimit,    !s.atNegLimit);
+    setLedColor(m_ledAngleOut,      !s.angleOutOfRange);
+    setLedColor(m_ledTargetOut,     !s.targetAngleOutOfRange);
+    setLedColor(m_ledServoFault,    !s.servoFaultActive());
+    for (int i = 0; i < 6; ++i) {
+        const bool open = i < (int)s.brakesOpen.size() && s.brakesOpen[i];
+        setLedColor(m_ledBrakeIndividual[i], !open);
+    }
     setLedColor(m_ledMotionInhibit, !s.motionInhibitEffective());
     auto [bp, bpr] = s.beamPermit();
     setLedColor(m_ledBeamPermit,    bp);
@@ -895,6 +1058,51 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
     }
 }
 
+void MainWindow::updateMotionInhibitBar(const GantryStatus &s) {
+    if (!m_motionInhibitBar) return;
+    if (!m_client.isConnected()) {
+        m_motionInhibitBar->setVisible(false);
+        return;
+    }
+    m_motionInhibitBar->setVisible(true);
+    if (s.motionInhibitEffective()) {
+        const QString reason = describeMotionInhibitReason(s);
+        m_motionInhibitBar->setText(QStringLiteral("运动禁止: %1").arg(reason));
+        m_motionInhibitBar->setStyleSheet(
+            "background-color:#4a1a1a; color:#ff9090; font-weight:bold;"
+            "padding:4px 8px; border-radius:4px; font-size:9pt;");
+        m_motionInhibitBar->setToolTip(reason);
+    } else {
+        m_motionInhibitBar->setText(QStringLiteral("运动允许"));
+        m_motionInhibitBar->setStyleSheet(
+            "background-color:#1a3a1a; color:#80e080; font-weight:bold;"
+            "padding:4px 8px; border-radius:4px; font-size:9pt;");
+        m_motionInhibitBar->setToolTip(QString());
+    }
+}
+
+void MainWindow::updateConnectionStatusDisplay() {
+    if (!m_connStatusLamp || !m_connStatusLabel) return;
+    if (!m_client.isConnected()) {
+        m_connStatusLamp->setStyleSheet(
+            "background-color:#d04040; border-radius:7px; min-width:14px; min-height:14px;");
+        m_connStatusLabel->setText(QStringLiteral("已断开"));
+        m_connStatusLabel->setStyleSheet("color:#d04040; font-weight:bold;");
+        return;
+    }
+    if (m_client.isPlcConnected()) {
+        m_connStatusLamp->setStyleSheet(
+            "background-color:#30d050; border-radius:7px; min-width:14px; min-height:14px;");
+        m_connStatusLabel->setText(QStringLiteral("HTTP 已连接 | PLC 已连接"));
+        m_connStatusLabel->setStyleSheet("color:#30d050; font-weight:bold;");
+    } else {
+        m_connStatusLamp->setStyleSheet(
+            "background-color:#d0a030; border-radius:7px; min-width:14px; min-height:14px;");
+        m_connStatusLabel->setText(QStringLiteral("HTTP 已连接 | PLC 未连接"));
+        m_connStatusLabel->setStyleSheet("color:#e0c040; font-weight:bold;");
+    }
+}
+
 void MainWindow::resetAllLeds() {
     setLedColor(m_ledAuto,          false);
     setLedColor(m_ledManual,        false);
@@ -907,8 +1115,19 @@ void MainWindow::resetAllLeds() {
     setLedColor(m_ledSafety,        false);
     setLedColor(m_ledAir,           false);
     setLedColor(m_ledBrakes,        false);
+    setLedColor(m_ledZeroSwitch,    false);
+    setLedColor(m_ledLimitPos185,   false);
+    setLedColor(m_ledLimitNeg185,   false);
+    setLedColor(m_ledAtPosLimit,    false);
+    setLedColor(m_ledAtNegLimit,    false);
+    setLedColor(m_ledAngleOut,      false);
+    setLedColor(m_ledTargetOut,     false);
+    setLedColor(m_ledServoFault,    false);
+    for (int i = 0; i < 6; ++i)
+        setLedColor(m_ledBrakeIndividual[i], false);
     setLedColor(m_ledMotionInhibit, false);
     setLedColor(m_ledBeamPermit,    false);
+    m_ledEstop.text->setText(QStringLiteral("急停正常"));
     m_ledBeamPermit.text->setText(kBeamPermitLedLabel);
     if (m_gauge) {
         m_gauge->setAngle(0.0);
@@ -970,17 +1189,99 @@ void MainWindow::updateChart(double angle) {
 // ============================================================================
 
 void MainWindow::onCommandResponse(const TcsResponse &r) {
-    if (!r.ok && !r.error.isEmpty())
-        onLogMessage(QString("TCS 错误 [%1]: %2").arg(r.cmd, r.error));
-    if (r.cmd == "ping")
+    const QString cmd = r.cmd;
+    if (!r.ok) {
+        onLogMessage(QStringLiteral("命令失败 [%1]: %2 [%3]").arg(cmd, r.error, r.errorCode));
+        showApiErrorPopup(r);
+    }
+
+    if (cmd == QStringLiteral("verify")) {
+        if (r.ok && !r.rawData.isEmpty())
+            showVerifyResultDialog(r.rawData);
+        return;
+    }
+
+    if (cmd == QStringLiteral("self-test")) {
+        if (r.ok && r.commandSuccess) {
+            onLogMessage(QStringLiteral("上电自检: 通过"));
+            QMessageBox::information(this, QStringLiteral("上电自检"),
+                QStringLiteral("自检通过"));
+        } else if (!r.ok || !r.commandSuccess) {
+            QString body = r.failures.isEmpty()
+                ? r.error
+                : QStringLiteral("• %1").arg(r.failures.join(QStringLiteral("\n• ")));
+            onLogMessage(QStringLiteral("上电自检: 失败 — %1").arg(body));
+            QMessageBox::warning(this, QStringLiteral("上电自检失败"), body);
+        }
+        return;
+    }
+
+    if (cmd == QStringLiteral("full")) {
+        const QString detail = r.motionDetail.isEmpty() ? r.error : r.motionDetail;
+        if (r.ok && r.commandSuccess) {
+            onLogMessage(QStringLiteral("完整工作流: 成功 — %1").arg(detail));
+            QMessageBox::information(this, QStringLiteral("完整工作流"),
+                detail.isEmpty() ? QStringLiteral("工作流完成") : detail);
+        } else {
+            onLogMessage(QStringLiteral("完整工作流: 失败 — %1").arg(detail));
+            QMessageBox::warning(this, QStringLiteral("完整工作流失败"), detail);
+        }
+        return;
+    }
+
+    if (cmd == QStringLiteral("home")) {
+        const QString detail = r.motionDetail.isEmpty() ? r.error : r.motionDetail;
+        if (r.ok && r.commandSuccess)
+            onLogMessage(QStringLiteral("寻零: 完成 — %1").arg(detail));
+        else if (!r.ok)
+            onLogMessage(QStringLiteral("寻零: 失败 — %1").arg(detail));
+        else
+            onLogMessage(QStringLiteral("寻零: %1").arg(detail));
+        return;
+    }
+
+    if (cmd == QStringLiteral("jog")) {
+        const QString detail = r.motionDetail.isEmpty() ? r.error : r.motionDetail;
+        if (r.ok && r.commandSuccess)
+            onLogMessage(QStringLiteral("点动: 完成 — %1").arg(detail));
+        else if (!r.ok)
+            onLogMessage(QStringLiteral("点动: 失败 — %1").arg(detail));
+        return;
+    }
+
+    if (cmd == QStringLiteral("position")) {
+        const QString detail = r.motionDetail.isEmpty() ? r.error : r.motionDetail;
+        if (r.ok && r.commandSuccess)
+            onLogMessage(QStringLiteral("定角: 完成 — %1 (目标 %2°)")
+                .arg(detail).arg(r.targetDeg, 0, 'f', 2));
+        else if (!r.ok)
+            onLogMessage(QStringLiteral("定角: 失败 — %1").arg(detail));
+        return;
+    }
+
+    if (cmd == QStringLiteral("ping"))
         onLogMessage(r.pong ? "Ping: pong=true" : "Ping 错误: " + r.error);
-    else if (r.cmd == "snapshot")
+    else if (cmd == QStringLiteral("snapshot"))
         onLogMessage(QString("快照: ok=%1 beam_permit=%2 %3")
             .arg(r.ok).arg(r.beamPermit ? "是" : "否").arg(r.beamPermitReason));
-    else if (r.cmd == "move")
-        onLogMessage(QString("运动: %1 | %2 | target=%3°")
-            .arg(r.motionComplete ? "完成" : "进行中/失败", r.motionDetail)
-            .arg(r.targetDeg, 0, 'f', 2));
+    else if (!r.ok && !r.error.isEmpty())
+        onLogMessage(QString("命令 [%1]: %2").arg(cmd, r.error));
+}
+
+void MainWindow::showApiErrorPopup(const TcsResponse &r) {
+    static const QSet<QString> kPopupCodes = {
+        QStringLiteral("BUSY"),
+        QStringLiteral("SAFETY_INHIBIT"),
+        QStringLiteral("MOTION_FAILED"),
+        QStringLiteral("SELF_TEST_FAILED"),
+        QStringLiteral("WORKFLOW_FAILED"),
+        QStringLiteral("NOT_CONNECTED"),
+    };
+    if (!kPopupCodes.contains(r.errorCode)) return;
+    if (r.cmd == QStringLiteral("self-test") || r.cmd == QStringLiteral("full"))
+        return; // 已有专用弹窗
+    QMessageBox::warning(this, QStringLiteral("操作被拒绝"),
+        QStringLiteral("[%1] %2").arg(r.errorCode, r.error));
 }
 
 void MainWindow::onLogMessage(const QString &msg) { appendLogRow(msg); }
@@ -989,22 +1290,25 @@ void MainWindow::onConnectionError(const QString &err) { onLogMessage("通信错
 
 void MainWindow::updateControlsForConnectionMode() {
     const bool connected = m_client.isConnected();
+    const bool motionBusy = m_client.isMotionInProgress();
 
-    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(connected && !m_motionBusy);
+    if (m_motionModbusBlock) m_motionModbusBlock->setEnabled(connected && !motionBusy);
     if (m_btnAuto) m_btnAuto->setEnabled(connected);
     if (m_btnManual) m_btnManual->setEnabled(connected);
-    if (m_btnHome) m_btnHome->setEnabled(connected && !m_motionBusy);
+    if (m_btnHome) m_btnHome->setEnabled(connected && !motionBusy);
     if (m_btnReset) m_btnReset->setEnabled(connected);
     if (m_btnEstop) m_btnEstop->setEnabled(connected);
     if (m_btnBrakesClose) m_btnBrakesClose->setEnabled(connected);
     if (m_btnBrakesOpen) m_btnBrakesOpen->setEnabled(connected);
     if (m_btnEstopRecover) m_btnEstopRecover->setEnabled(connected);
-    if (m_btnSelfTest) m_btnSelfTest->setEnabled(connected && !m_motionBusy);
-    if (m_btnWorkflow) m_btnWorkflow->setEnabled(connected && !m_motionBusy);
-    if (m_btnMove) m_btnMove->setEnabled(connected && !m_motionBusy);
+    if (m_btnSelfTest) m_btnSelfTest->setEnabled(connected && !motionBusy);
+    if (m_btnWorkflow) m_btnWorkflow->setEnabled(connected && !motionBusy);
+    if (m_btnMove) m_btnMove->setEnabled(connected && !motionBusy);
+    if (m_btnVerify) m_btnVerify->setEnabled(connected && !motionBusy);
+    if (m_btnDiscrete) m_btnDiscrete->setEnabled(connected);
 }
 
-void MainWindow::connectToPlc() {
+void MainWindow::connectToBackend() {
     m_pollTimer.stop();
     QString host = m_hostEdit->text().trimmed();
     if (host.isEmpty()) {
@@ -1019,12 +1323,12 @@ void MainWindow::connectToPlc() {
             QStringLiteral("\u7AEF\u53E3\u53F7\u65E0\u6548\uFF0C\u8BF7\u8F93\u5165 1~65535 \u4E4B\u95F4\u7684\u6574\u6570\u3002"));
         return;
     }
+    saveSettings();
     m_client.connectToBackend(host, static_cast<quint16>(port));
-    // \u8F6E\u8BE2\u5B9A\u65F6\u5668\u5728 connected \u4FE1\u53F7\u4E2D\u542F\u52A8\uFF0C\u907F\u514D\u8FDE\u63A5\u672A\u5B8C\u6210\u524D\u7A7A\u8F6E\u8BE2
     m_chartTimer.start();
 }
 
-void MainWindow::disconnectFromPlc() {
+void MainWindow::disconnectFromBackend() {
     m_pollTimer.stop();
     resetAllLeds();
     m_client.disconnect();
@@ -1073,10 +1377,9 @@ void MainWindow::recoverEstop() {
 }
 
 void MainWindow::startHoming() {
-    if (m_motionBusy) return;
-    m_motionBusy = true;
-    setMotionButtonsEnabled(false);
+    if (m_client.isMotionInProgress()) return;
     m_client.startHoming();
+    setMotionButtonsEnabled(false);
 }
 
 void MainWindow::emergencyStop() {
@@ -1086,23 +1389,21 @@ void MainWindow::emergencyStop() {
 }
 
 void MainWindow::jogFwd() {
-    if (m_motionBusy) return;
-    m_motionBusy = true;
-    setMotionButtonsEnabled(false);
+    if (m_client.isMotionInProgress()) return;
     m_client.manualJog(true, m_jogSpeedSpin->value(), m_jogSecondsSpin->value());
+    setMotionButtonsEnabled(false);
 }
 void MainWindow::jogRev() {
-    if (m_motionBusy) return;
-    m_motionBusy = true;
-    setMotionButtonsEnabled(false);
+    if (m_client.isMotionInProgress()) return;
     m_client.manualJog(false, m_jogSpeedSpin->value(), m_jogSecondsSpin->value());
+    setMotionButtonsEnabled(false);
 }
 void MainWindow::moveToPosition() {
-    if (m_motionBusy) return;
-    m_motionBusy = true;
-    setMotionButtonsEnabled(false);
+    if (m_client.isMotionInProgress()) return;
     m_client.moveToPosition(m_targetAngleSpin->value(), m_targetSpeedSpin->value(),
-                           m_timeoutSpin ? m_timeoutSpin->value() : 300.0);
+                           m_timeoutSpin ? m_timeoutSpin->value() : 300.0,
+                           currentPositionOptions());
+    setMotionButtonsEnabled(false);
 }
 
 // ============================================================================
@@ -1124,36 +1425,23 @@ int MainWindow::chartWindowSeconds() const {
 }
 
 void MainWindow::runSelfTest() {
-    if (m_motionBusy) return;
+    if (m_client.isMotionInProgress()) return;
     m_client.runSelfTest();
+    setMotionButtonsEnabled(false);
 }
 
 void MainWindow::runWorkflowFull() {
-    if (m_motionBusy) return;
-    // 弹出对话框输入角度序列
-    bool ok = false;
-    QString text = QInputDialog::getMultiLineText(this,
-        QStringLiteral("完整工作流"),
-        QStringLiteral("输入目标角度序列（每行一个角度，单位°）："),
-        QStringLiteral("0.0\n45.0\n90.0"),
-        &ok);
-    if (!ok || text.trimmed().isEmpty()) return;
-
+    if (m_client.isMotionInProgress()) return;
     QList<double> angles;
-    for (const auto &line : text.split('\n', Qt::SkipEmptyParts)) {
-        bool convOk = false;
-        double val = line.trimmed().toDouble(&convOk);
-        if (convOk && std::abs(val) <= 185.0)
-            angles.append(val);
-    }
-    if (angles.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("输入错误"),
-            QStringLiteral("未解析到有效角度值。"));
-        return;
-    }
-    m_motionBusy = true;
+    WorkflowFullOptions opts;
+    if (!showWorkflowDialog(angles, opts)) return;
+    m_client.runWorkflowFull(angles, opts);
     setMotionButtonsEnabled(false);
-    m_client.runWorkflowFull(angles);
+}
+
+void MainWindow::runPointTableVerify() {
+    if (!m_client.isConnected()) return;
+    m_client.runPointTableVerify();
 }
 
 void MainWindow::exportChartPng() {
@@ -1191,4 +1479,317 @@ void MainWindow::exportChartCsv() {
     file.close();
     onLogMessage(QStringLiteral("曲线 CSV 已保存: %1 (%2 点)")
         .arg(path).arg(m_angleSeries->count()));
+}
+
+void MainWindow::exportLogCsv() {
+    if (!m_logTable || m_logTable->rowCount() == 0) return;
+    QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("导出日志 CSV"),
+        QStringLiteral("gantry_log.csv"),
+        QStringLiteral("CSV (*.csv);;All Files (*)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+            QStringLiteral("无法写入文件: %1").arg(path));
+        return;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    out << QStringLiteral("date,time,detail\n");
+    for (int r = 0; r < m_logTable->rowCount(); ++r) {
+        out << QStringLiteral("%1,%2,%3\n")
+               .arg(m_logTable->item(r, 0) ? m_logTable->item(r, 0)->text() : QString())
+               .arg(m_logTable->item(r, 1) ? m_logTable->item(r, 1)->text() : QString())
+               .arg(m_logTable->item(r, 2) ? m_logTable->item(r, 2)->text() : QString());
+    }
+    file.close();
+    onLogMessage(QStringLiteral("日志 CSV 已保存: %1").arg(path));
+}
+
+int MainWindow::pollIntervalMs() const {
+    const int base = m_pollIntervalSpin ? m_pollIntervalSpin->value() : 1000;
+    if (m_client.isMotionInProgress()
+        || m_currentStatus.homingRunning
+        || m_currentStatus.positionModeRunning
+        || m_currentStatus.speedModeRunning)
+        return std::min(base, 500);
+    return base;
+}
+
+MotionPositionOptions MainWindow::currentPositionOptions() const {
+    MotionPositionOptions o;
+    if (m_tolSpin) o.tol = m_tolSpin->value();
+    if (m_arrivalModeCombo)
+        o.arrivalMode = m_arrivalModeCombo->currentData().toString();
+    if (m_requireHomingCheck) o.requireHoming = m_requireHomingCheck->isChecked();
+    if (m_autoModeCheck) o.autoMode = m_autoModeCheck->isChecked();
+    if (m_di04GraceSpin) o.di04Grace = m_di04GraceSpin->value();
+    if (m_plateauNSpin) o.plateauN = m_plateauNSpin->value();
+    return o;
+}
+
+void MainWindow::loadSettings() {
+    QSettings s(QStringLiteral("PGM"), QStringLiteral("GantryHMI"));
+    if (m_hostEdit) m_hostEdit->setText(s.value(QStringLiteral("host"), QStringLiteral("127.0.0.1")).toString());
+    if (m_portEdit) m_portEdit->setText(s.value(QStringLiteral("port"), 8080).toString());
+    if (m_pollIntervalSpin) m_pollIntervalSpin->setValue(s.value(QStringLiteral("poll_ms"), 1000).toInt());
+    if (m_chartWindowCombo) m_chartWindowCombo->setCurrentIndex(s.value(QStringLiteral("chart_window"), 0).toInt());
+    if (m_jogSpeedSpin) m_jogSpeedSpin->setValue(s.value(QStringLiteral("jog_speed"), 3.0).toDouble());
+    if (m_targetSpeedSpin) m_targetSpeedSpin->setValue(s.value(QStringLiteral("target_speed"), 3.0).toDouble());
+    if (m_timeoutSpin) m_timeoutSpin->setValue(s.value(QStringLiteral("timeout"), 300.0).toDouble());
+    if (m_tolSpin) m_tolSpin->setValue(s.value(QStringLiteral("tol"), 0.5).toDouble());
+    if (m_arrivalModeCombo) {
+        const QString mode = s.value(QStringLiteral("arrival_mode"), QStringLiteral("hybrid")).toString();
+        const int idx = m_arrivalModeCombo->findData(mode);
+        if (idx >= 0) m_arrivalModeCombo->setCurrentIndex(idx);
+    }
+    if (m_requireHomingCheck) m_requireHomingCheck->setChecked(s.value(QStringLiteral("require_homing"), true).toBool());
+    if (m_autoModeCheck) m_autoModeCheck->setChecked(s.value(QStringLiteral("auto_mode"), true).toBool());
+    if (m_di04GraceSpin) m_di04GraceSpin->setValue(s.value(QStringLiteral("di04_grace"), 5.0).toDouble());
+    if (m_plateauNSpin) m_plateauNSpin->setValue(s.value(QStringLiteral("plateau_n"), 5).toInt());
+    if (m_advOptionsGroup) m_advOptionsGroup->setChecked(s.value(QStringLiteral("adv_expanded"), false).toBool());
+    if (m_advOptionsGroup && m_advOptionsContent)
+        m_advOptionsContent->setVisible(m_advOptionsGroup->isChecked());
+}
+
+void MainWindow::saveSettings() {
+    QSettings s(QStringLiteral("PGM"), QStringLiteral("GantryHMI"));
+    if (m_hostEdit) s.setValue(QStringLiteral("host"), m_hostEdit->text().trimmed());
+    if (m_portEdit) s.setValue(QStringLiteral("port"), m_portEdit->text().trimmed());
+    if (m_pollIntervalSpin) s.setValue(QStringLiteral("poll_ms"), m_pollIntervalSpin->value());
+    if (m_chartWindowCombo) s.setValue(QStringLiteral("chart_window"), m_chartWindowCombo->currentIndex());
+    if (m_jogSpeedSpin) s.setValue(QStringLiteral("jog_speed"), m_jogSpeedSpin->value());
+    if (m_targetSpeedSpin) s.setValue(QStringLiteral("target_speed"), m_targetSpeedSpin->value());
+    if (m_timeoutSpin) s.setValue(QStringLiteral("timeout"), m_timeoutSpin->value());
+    if (m_tolSpin) s.setValue(QStringLiteral("tol"), m_tolSpin->value());
+    if (m_arrivalModeCombo)
+        s.setValue(QStringLiteral("arrival_mode"), m_arrivalModeCombo->currentData().toString());
+    if (m_requireHomingCheck) s.setValue(QStringLiteral("require_homing"), m_requireHomingCheck->isChecked());
+    if (m_autoModeCheck) s.setValue(QStringLiteral("auto_mode"), m_autoModeCheck->isChecked());
+    if (m_di04GraceSpin) s.setValue(QStringLiteral("di04_grace"), m_di04GraceSpin->value());
+    if (m_plateauNSpin) s.setValue(QStringLiteral("plateau_n"), m_plateauNSpin->value());
+    if (m_advOptionsGroup) s.setValue(QStringLiteral("adv_expanded"), m_advOptionsGroup->isChecked());
+}
+
+bool MainWindow::showWorkflowDialog(QList<double> &anglesOut, WorkflowFullOptions &optsOut) {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("完整工作流"));
+    auto *layout = new QVBoxLayout(&dlg);
+
+    auto *angEdit = new QPlainTextEdit(QStringLiteral("0.0\n45.0\n90.0"));
+    angEdit->setPlaceholderText(QStringLiteral("每行一个角度 (°)"));
+    layout->addWidget(new QLabel(QStringLiteral("目标角度序列:")));
+    layout->addWidget(angEdit);
+
+    auto *spdSpin = new QDoubleSpinBox;
+    spdSpin->setRange(0.1, 20.0);
+    spdSpin->setValue(optsOut.speed);
+    spdSpin->setSuffix(QStringLiteral(" °/s"));
+    auto *tolSpin = new QDoubleSpinBox;
+    tolSpin->setRange(0.05, 5.0);
+    tolSpin->setValue(m_tolSpin ? m_tolSpin->value() : 0.5);
+    tolSpin->setSuffix(QStringLiteral(" °"));
+    auto *toSpin = new QDoubleSpinBox;
+    toSpin->setRange(10.0, 600.0);
+    toSpin->setValue(m_timeoutSpin ? m_timeoutSpin->value() : 300.0);
+    toSpin->setSuffix(QStringLiteral(" s"));
+
+    auto *paramGrid = new QGridLayout;
+    paramGrid->addWidget(new QLabel(QStringLiteral("速度")), 0, 0);
+    paramGrid->addWidget(spdSpin, 0, 1);
+    paramGrid->addWidget(new QLabel(QStringLiteral("容差")), 1, 0);
+    paramGrid->addWidget(tolSpin, 1, 1);
+    paramGrid->addWidget(new QLabel(QStringLiteral("超时")), 2, 0);
+    paramGrid->addWidget(toSpin, 2, 1);
+    layout->addLayout(paramGrid);
+
+    auto *skipCheck = new QCheckBox(QStringLiteral("跳过自检"));
+    auto *resetCheck = new QCheckBox(QStringLiteral("失败时复位"));
+    layout->addWidget(skipCheck);
+    layout->addWidget(resetCheck);
+
+    auto *arrCombo = new QComboBox;
+    arrCombo->addItem(QStringLiteral("hybrid"), QStringLiteral("hybrid"));
+    arrCombo->addItem(QStringLiteral("strict_04"), QStringLiteral("strict_04"));
+    arrCombo->addItem(QStringLiteral("angle"), QStringLiteral("angle"));
+    if (m_arrivalModeCombo) {
+        const int idx = m_arrivalModeCombo->currentIndex();
+        if (idx >= 0) arrCombo->setCurrentIndex(idx);
+    }
+    auto *graceSpin = new QDoubleSpinBox;
+    graceSpin->setRange(0.0, 60.0);
+    graceSpin->setValue(m_di04GraceSpin ? m_di04GraceSpin->value() : 5.0);
+    graceSpin->setSuffix(QStringLiteral(" s"));
+    auto *platSpin = new QSpinBox;
+    platSpin->setRange(1, 20);
+    platSpin->setValue(m_plateauNSpin ? m_plateauNSpin->value() : 5);
+
+    auto *advGrid = new QGridLayout;
+    advGrid->addWidget(new QLabel(QStringLiteral("到位模式")), 0, 0);
+    advGrid->addWidget(arrCombo, 0, 1);
+    advGrid->addWidget(new QLabel(QStringLiteral("DI04宽限")), 1, 0);
+    advGrid->addWidget(graceSpin, 1, 1);
+    advGrid->addWidget(new QLabel(QStringLiteral("平台采样")), 2, 0);
+    advGrid->addWidget(platSpin, 2, 1);
+    layout->addLayout(advGrid);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dlg.exec() != QDialog::Accepted) return false;
+
+    anglesOut.clear();
+    for (const auto &line : angEdit->toPlainText().split('\n', Qt::SkipEmptyParts)) {
+        bool convOk = false;
+        double val = line.trimmed().toDouble(&convOk);
+        if (convOk && std::abs(val) <= 185.0)
+            anglesOut.append(val);
+    }
+    if (anglesOut.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("输入错误"),
+            QStringLiteral("未解析到有效角度值。"));
+        return false;
+    }
+
+    optsOut.speed = spdSpin->value();
+    optsOut.tol = tolSpin->value();
+    optsOut.timeout = toSpin->value();
+    optsOut.skipSelfTest = skipCheck->isChecked();
+    optsOut.resetOnFail = resetCheck->isChecked();
+    optsOut.arrivalMode = arrCombo->currentData().toString();
+    optsOut.di04Grace = graceSpin->value();
+    optsOut.plateauN = platSpin->value();
+    return true;
+}
+
+void MainWindow::showVerifyResultDialog(const QJsonObject &data) {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("点表巡检结果"));
+    dlg.resize(720, 480);
+    auto *layout = new QVBoxLayout(&dlg);
+
+    const bool allOk = data.value(QStringLiteral("all_ok")).toBool(false);
+    auto *summary = new QLabel(allOk
+        ? QStringLiteral("巡检通过 (all_ok=true)")
+        : QStringLiteral("巡检未完全通过 (all_ok=false)"));
+    summary->setStyleSheet(allOk ? "color:#80e080; font-weight:bold;"
+                                 : "color:#ff9090; font-weight:bold;");
+    layout->addWidget(summary);
+
+    auto *table = new QTableWidget(0, 4);
+    table->setHorizontalHeaderLabels({
+        QStringLiteral("类别"), QStringLiteral("名称/地址"), QStringLiteral("值"), QStringLiteral("状态")
+    });
+    table->horizontalHeader()->setStretchLastSection(true);
+
+    auto addRow = [&](const QString &cat, const QString &name, const QString &val, bool ok) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        auto setCell = [&](int col, const QString &text, bool fail = false) {
+            auto *item = new QTableWidgetItem(text);
+            if (fail) item->setForeground(QBrush(QColor(255, 120, 120)));
+            table->setItem(row, col, item);
+        };
+        setCell(0, cat);
+        setCell(1, name);
+        setCell(2, val);
+        setCell(3, ok ? QStringLiteral("OK") : QStringLiteral("失败"), !ok);
+    };
+
+    for (const auto &e : data.value(QStringLiteral("errors")).toArray())
+        addRow(QStringLiteral("错误"), e.toString(), QStringLiteral("-"), false);
+
+    const auto addSection = [&](const char *key, const QString &cat) {
+        for (const auto &v : data.value(QString::fromUtf8(key)).toArray()) {
+            const QJsonObject o = v.toObject();
+            const bool itemOk = o.value(QStringLiteral("ok")).toBool(true);
+            const QString name = o.value(QStringLiteral("name")).toString(
+                o.value(QStringLiteral("address_5digit")).toString());
+            QString val;
+            if (o.contains(QStringLiteral("value"))) {
+                const QJsonValue jv = o.value(QStringLiteral("value"));
+                val = jv.isBool() ? (jv.toBool() ? QStringLiteral("1") : QStringLiteral("0"))
+                                  : QString::number(jv.toDouble());
+            }
+            addRow(cat, name, val, itemOk);
+        }
+    };
+    addSection("discrete", QStringLiteral("离散"));
+    addSection("input_registers", QStringLiteral("输入寄存器"));
+    addSection("holding_registers", QStringLiteral("保持寄存器"));
+
+    layout->addWidget(table, 1);
+
+    auto *btnRow = new QHBoxLayout;
+    auto *btnExport = new QPushButton(QStringLiteral("导出 JSON"));
+    connect(btnExport, &QPushButton::clicked, &dlg, [&]() {
+        QString path = QFileDialog::getSaveFileName(&dlg,
+            QStringLiteral("导出巡检 JSON"), QStringLiteral("verify_result.json"),
+            QStringLiteral("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
+            f.close();
+            onLogMessage(QStringLiteral("巡检 JSON 已保存: %1").arg(path));
+        }
+    });
+    auto *btnClose = new QPushButton(QStringLiteral("关闭"));
+    connect(btnClose, &QPushButton::clicked, &dlg, &QDialog::accept);
+    btnRow->addWidget(btnExport);
+    btnRow->addStretch();
+    btnRow->addWidget(btnClose);
+    layout->addLayout(btnRow);
+
+    dlg.exec();
+}
+
+void MainWindow::showDiscreteMonitor() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("离散量监视 (00000~00069)"));
+    dlg.resize(520, 560);
+    auto *layout = new QVBoxLayout(&dlg);
+
+    auto *table = new QTableWidget(0, 4);
+    table->setHorizontalHeaderLabels({
+        QStringLiteral("地址"), QStringLiteral("名称"), QStringLiteral("值"), QStringLiteral("备注")
+    });
+    table->horizontalHeader()->setStretchLastSection(true);
+
+    const auto &bits = m_currentStatus.rawDiscreteBits;
+    const int n = bits.empty() ? 70 : static_cast<int>(bits.size());
+    for (int i = 0; i < n && i < 70; ++i) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        const bool val = i < (int)bits.size() && bits[i];
+        bool alert = false;
+        if (i >= 33 && i <= 36 && val) alert = true;
+        if ((i == 20 || i == 21) && !val) alert = true;
+        if ((i == 38 || i == 39) && val) alert = true;
+        if ((i == 42 || i == 43) && val) alert = true;
+        if (i >= 61 && i <= 65 && val) alert = true;
+
+        auto setCell = [&](int col, const QString &text) {
+            auto *item = new QTableWidgetItem(text);
+            if (alert) item->setForeground(QBrush(QColor(255, 100, 100)));
+            table->setItem(row, col, item);
+        };
+        setCell(0, QString::number(i).rightJustified(5, '0'));
+        setCell(1, discreteInputLabel(i));
+        setCell(2, val ? QStringLiteral("1") : QStringLiteral("0"));
+        setCell(3, alert ? QStringLiteral("异常") : QString());
+    }
+
+    layout->addWidget(table, 1);
+    auto *btnClose = new QPushButton(QStringLiteral("关闭"));
+    connect(btnClose, &QPushButton::clicked, &dlg, &QDialog::accept);
+    auto *btnRow = new QHBoxLayout;
+    btnRow->addStretch();
+    btnRow->addWidget(btnClose);
+    layout->addLayout(btnRow);
+
+    dlg.exec();
 }

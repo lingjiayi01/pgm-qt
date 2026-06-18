@@ -27,8 +27,8 @@ private slots:
     void onCommandResponse(const TcsResponse &resp);
     void onLogMessage(const QString &msg);
     void onConnectionError(const QString &err);
-    void connectToPlc();
-    void disconnectFromPlc();
+    void connectToBackend();
+    void disconnectFromBackend();
     void setAutoMode()   { m_client.setAutoMode(); }
     void setManualMode() { m_client.setManualMode(); }
     void startHoming();
@@ -43,8 +43,11 @@ private slots:
     void recoverEstop();
     void runSelfTest();
     void runWorkflowFull();
+    void runPointTableVerify();
+    void showDiscreteMonitor();
     void exportChartPng();
     void exportChartCsv();
+    void exportLogCsv();
 
 private:
     void buildUi();
@@ -72,13 +75,22 @@ private:
     LedItem makeLed(const QString &label);
     void setLedColor(LedItem &led, bool on, bool running = false);
     void updateStatusLeds(const GantryStatus &s);
+    void updateMotionInhibitBar(const GantryStatus &s);
+    void updateConnectionStatusDisplay();
     void resetAllLeds();
     void updateAngleDisplay(const GantryStatus &s);
     void updateParameterDisplay(const GantryStatus &s);
     void updateChart(double angle);
     void updateControlsForConnectionMode();
     void setMotionButtonsEnabled(bool enabled);
+    void showApiErrorPopup(const TcsResponse &r);
+    bool showWorkflowDialog(QList<double> &anglesOut, WorkflowFullOptions &optsOut);
+    void showVerifyResultDialog(const QJsonObject &data);
+    void loadSettings();
+    void saveSettings();
     int chartWindowSeconds() const;
+    int pollIntervalMs() const;
+    MotionPositionOptions currentPositionOptions() const;
 
     GantryClient m_client;
     QTimer m_pollTimer;
@@ -87,12 +99,17 @@ private:
     QLineEdit *m_portEdit = nullptr;
     QLabel *m_connStatusLamp = nullptr;
     QLabel *m_connStatusLabel = nullptr;
+    QLabel *m_motionInhibitBar = nullptr;
 
     GaugeWidget *m_gauge = nullptr;
 
     LedItem m_ledAuto, m_ledManual, m_ledSpeed, m_ledHoming, m_ledPosition;
     LedItem m_ledMotor, m_ledHomingDone, m_ledEstop, m_ledSafety;
     LedItem m_ledAir, m_ledBrakes, m_ledMotionInhibit, m_ledBeamPermit;
+    LedItem m_ledLimitPos185, m_ledLimitNeg185;
+    LedItem m_ledAtPosLimit, m_ledAtNegLimit;
+    LedItem m_ledAngleOut, m_ledTargetOut, m_ledZeroSwitch, m_ledServoFault;
+    LedItem m_ledBrakeIndividual[6];
 
     QLabel *m_labelServoAngle = nullptr, *m_labelAbs01Angle = nullptr;
     QLabel *m_labelAbs02Angle = nullptr;
@@ -105,6 +122,14 @@ private:
     QDoubleSpinBox *m_targetAngleSpin = nullptr, *m_targetSpeedSpin = nullptr;
     QDoubleSpinBox *m_jogSpeedSpin = nullptr, *m_jogSecondsSpin = nullptr;
     QDoubleSpinBox *m_timeoutSpin = nullptr;
+    QDoubleSpinBox *m_tolSpin = nullptr;
+    QDoubleSpinBox *m_di04GraceSpin = nullptr;
+    QSpinBox *m_plateauNSpin = nullptr;
+    QComboBox *m_arrivalModeCombo = nullptr;
+    QCheckBox *m_requireHomingCheck = nullptr;
+    QCheckBox *m_autoModeCheck = nullptr;
+    QWidget *m_advOptionsContent = nullptr;
+    QGroupBox *m_advOptionsGroup = nullptr;
 
     QWidget *m_motionModbusBlock = nullptr;
     QPushButton *m_btnAuto = nullptr, *m_btnManual = nullptr, *m_btnHome = nullptr;
@@ -112,7 +137,8 @@ private:
     QPushButton *m_btnBrakesOpen = nullptr, *m_btnEstopRecover = nullptr;
     QPushButton *m_btnSelfTest = nullptr, *m_btnWorkflow = nullptr;
     QPushButton *m_btnMove = nullptr;
-    bool m_motionBusy = false;
+    QPushButton *m_btnVerify = nullptr;
+    QPushButton *m_btnDiscrete = nullptr;
 
     QChart *m_chart = nullptr;
     QChartView *m_chartView = nullptr;
@@ -122,6 +148,7 @@ private:
     QValueAxis *m_angleAxis = nullptr;
     QElapsedTimer m_chartTimer;
     QComboBox *m_chartWindowCombo = nullptr;
+    QSpinBox *m_pollIntervalSpin = nullptr;
     static constexpr int kMaxChartPoints = 1500;
     static constexpr int kParamNameColWidth = 88;
 
