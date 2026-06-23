@@ -15,13 +15,17 @@
 #include <cmath>
 
 namespace {
-constexpr int kWindowWidth = 1360;
-constexpr int kWindowHeight = 860;
+constexpr int kMinWindowWidth = 1024;
+constexpr int kMinWindowHeight = 600;
+constexpr int kDefaultWindowWidth = 1360;
+constexpr int kDefaultWindowHeight = 860;
 constexpr int kTitleBarHeight = 44;
 constexpr int kLayoutSpacing = 8;
 constexpr int kCompactSpacing = 4;
 constexpr int kBtnMinWidth = 72;
-constexpr int kGaugeFixedSize = 240;
+constexpr int kTouchBtnMinHeight = 40;
+constexpr int kTouchBtnMaxHeight = 48;
+constexpr int kGaugeMinSize = 180;
 
 const QString kBeamPermitLedLabel = QStringLiteral("可出束[软件占位]");
 const QString kBeamPermitLedTooltip = QStringLiteral(
@@ -38,7 +42,7 @@ QLabel { color: #d0d0d8; }
 QPushButton {
     background-color: #333340; color: #d0d0d8;
     border: 1px solid #4a4a55; border-radius: 4px;
-    padding: 4px 8px; min-height: 24px; max-height: 28px;
+    padding: 6px 10px; min-height: 36px; max-height: 48px;
 }
 QPushButton:hover { background-color: #3d3d4a; border-color: #6a6a78; }
 QPushButton:pressed { background-color: #2a2a32; }
@@ -48,6 +52,7 @@ QPushButton:checked {
 QPushButton#btnEstop {
     background-color: #b82020; border: 1px solid #ff5050;
     color: #ffffff; font-weight: bold;
+    min-height: 44px;
 }
 QPushButton#btnEstop:hover { background-color: #d02828; }
 QPushButton#btnEstop:pressed { background-color: #901818; }
@@ -97,8 +102,8 @@ void MainWindow::styleUniformButtons(const QList<QPushButton *> &buttons, int mi
     for (auto *btn : buttons) {
         if (!btn) continue;
         if (minWidth > 0) btn->setMinimumWidth(minWidth);
-        btn->setMinimumHeight(26);
-        btn->setMaximumHeight(30);
+        btn->setMinimumHeight(kTouchBtnMinHeight);
+        btn->setMaximumHeight(kTouchBtnMaxHeight);
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
 }
@@ -117,7 +122,9 @@ QLabel *MainWindow::makeSectionLabel(const QString &html) {
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("PGM 旋转机架控制系统");
-    setFixedSize(kWindowWidth, kWindowHeight);
+    setMinimumSize(kMinWindowWidth, kMinWindowHeight);
+    resize(kDefaultWindowWidth, kDefaultWindowHeight);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setStyleSheet(kStyle);
     buildUi();
     loadSettings();
@@ -195,9 +202,15 @@ void MainWindow::buildUi() {
     auto *body = new QHBoxLayout;
     body->setSpacing(6);
     body->setContentsMargins(6, 6, 6, 6);
-    body->addWidget(buildLeftPanel(), 4);
-    body->addWidget(buildCenterPanel(), 3);
-    body->addWidget(buildRightPanel(), 4);
+    auto *left = buildLeftPanel();
+    auto *center = buildCenterPanel();
+    auto *right = buildRightPanel();
+    for (auto *p : {left, center, right}) {
+        p->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    }
+    body->addWidget(left, 4);
+    body->addWidget(center, 3);
+    body->addWidget(right, 4);
     root->addLayout(body, 1);
 
     updateControlsForConnectionMode();
@@ -294,8 +307,8 @@ QWidget *MainWindow::buildLeftPanel() {
 
     m_gauge = new GaugeWidget;
     m_gauge->setTitle(QStringLiteral("旋转机架"));
-    m_gauge->setFixedSize(kGaugeFixedSize, kGaugeFixedSize);
-    instrV->addWidget(m_gauge, 0, Qt::AlignHCenter);
+    m_gauge->setMinimumSize(kGaugeMinSize, kGaugeMinSize);
+    instrV->addWidget(m_gauge, 1, Qt::AlignHCenter);
 
     auto *readForm = new QFormLayout;
     readForm->setSpacing(3);
@@ -306,7 +319,7 @@ QWidget *MainWindow::buildLeftPanel() {
     addFormReading(readForm, QStringLiteral("扭矩1"), m_labelServo1Torque, QStringLiteral("Nm"));
     addFormReading(readForm, QStringLiteral("扭矩2"), m_labelServo2Torque, QStringLiteral("Nm"));
     instrV->addLayout(readForm);
-    v->addWidget(instr, 0);
+    v->addWidget(instr, 2);
 
     // 曲线区（Qt Charts 实现速度/力矩切换）
     auto *curveBox = new QWidget;
@@ -347,10 +360,12 @@ QWidget *MainWindow::buildLeftPanel() {
     initTrendChart();
     m_trendChartView = new QChartView(m_trendChart);
     m_trendChartView->setRenderHint(QPainter::Antialiasing);
-    m_trendChartView->setMinimumHeight(200);
+    m_trendChartView->setMinimumHeight(160);
+    m_trendChartView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     curveV->addWidget(m_trendChartView, 1);
-    v->addWidget(curveBox, 1);
+    v->addWidget(curveBox, 3);
 
+    panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return panel;
 }
 
@@ -536,6 +551,7 @@ QWidget *MainWindow::buildCenterPanel() {
     m_advOptionsContent->setMaximumHeight(0);
     v->addWidget(m_advOptionsContent);
 
+    panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return panel;
 }
 
@@ -657,6 +673,7 @@ QWidget *MainWindow::buildRightPanel() {
                        m_labelSlip1, m_labelSlip2, m_labelShearForce, m_labelEstopOvershoot})
         lb->hide();
 
+    panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     return panel;
 }
 

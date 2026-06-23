@@ -8,6 +8,10 @@ int main(int argc, char *argv[])
     app.setApplicationVersion("1.0.0");
     app.setOrganizationName("PGM");
 
+    // 高 DPI 工控屏缩放
+    QApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
     // 全局暗色调色板
     QPalette darkPalette;
     darkPalette.setColor(QPalette::Window, QColor(26, 26, 32));
@@ -26,7 +30,13 @@ int main(int argc, char *argv[])
     app.setPalette(darkPalette);
 
     MainWindow w;
-    w.show();
+    const bool windowed = app.arguments().contains(QStringLiteral("--windowed"));
+    if (windowed) {
+        w.show();
+    } else {
+        // 工业触摸屏：默认铺满可用屏幕区域
+        w.showMaximized();
+    }
 
     return app.exec();
 }
