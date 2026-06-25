@@ -435,10 +435,10 @@ struct AuthSession {
 };
 
 inline QString authErrorMessage(const ApiResponse &api) {
-    if (api.errorCode == QStringLiteral("USER_NOT_FOUND"))
-        return QStringLiteral("账号不存在");
-    if (api.errorCode == QStringLiteral("INVALID_PASSWORD"))
-        return QStringLiteral("密码错误");
+    if (api.errorCode == QStringLiteral("INVALID_CREDENTIALS")
+        || api.errorCode == QStringLiteral("INVALID_PASSWORD")
+        || api.errorCode == QStringLiteral("USER_NOT_FOUND"))
+        return QStringLiteral("用户名或密码错误");
     if (api.errorCode == QStringLiteral("ACCOUNT_LOCKED"))
         return api.error.isEmpty() ? QStringLiteral("账号已锁定") : api.error;
     if (api.errorCode == QStringLiteral("TOKEN_INVALID")
