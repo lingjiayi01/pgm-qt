@@ -1,18 +1,9 @@
 #include <QApplication>
+#include "login_dialog.h"
 #include "main_window.h"
 
-int main(int argc, char *argv[])
-{
-    QApplication app(argc, argv);
-    app.setApplicationName("PGM Gantry Frontend");
-    app.setApplicationVersion("1.0.0");
-    app.setOrganizationName("PGM");
-
-    // 高 DPI 工控屏缩放
-    QApplication::setHighDpiScaleFactorRoundingPolicy(
-        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
-
-    // 全局暗色调色板
+namespace {
+void applyDarkPalette(QApplication &app) {
     QPalette darkPalette;
     darkPalette.setColor(QPalette::Window, QColor(26, 26, 32));
     darkPalette.setColor(QPalette::WindowText, QColor(208, 208, 216));
@@ -28,15 +19,38 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Highlight, QColor(60, 100, 200));
     darkPalette.setColor(QPalette::HighlightedText, QColor(240, 240, 248));
     app.setPalette(darkPalette);
+}
+} // namespace
 
-    MainWindow w;
+int main(int argc, char *argv[])
+{
+    QApplication app(argc, argv);
+    app.setApplicationName("PGM Gantry Frontend");
+    app.setApplicationVersion("1.0.0");
+    app.setOrganizationName("PGM");
+
+    QApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
+    applyDarkPalette(app);
+
     const bool windowed = app.arguments().contains(QStringLiteral("--windowed"));
-    if (windowed) {
-        w.show();
-    } else {
-        // 工业触摸屏：默认铺满可用屏幕区域
-        w.showMaximized();
-    }
 
-    return app.exec();
+    for (;;) {
+        LoginDialog loginDlg;
+        if (loginDlg.exec() != QDialog::Accepted)
+            return 0;
+
+        MainWindow w;
+        w.applyAuthSession(loginDlg.session());
+
+        if (windowed)
+            w.show();
+        else
+            w.showMaximized();
+
+        const int code = app.exec();
+        if (code != kReloginExitCode)
+            return code;
+    }
 }

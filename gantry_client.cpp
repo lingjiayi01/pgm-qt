@@ -23,6 +23,35 @@ GantryClient::~GantryClient() {
     disconnect();
 }
 
+void GantryClient::applyAuthHeader(QNetworkRequest &req) const {
+    if (!m_authToken.isEmpty())
+        req.setRawHeader("Authorization", ("Bearer " + m_authToken).toUtf8());
+}
+
+void GantryClient::handleAuthFailure(const ApiResponse &api, int httpStatus) {
+    if (httpStatus == 401
+        || api.errorCode == QStringLiteral("UNAUTHORIZED")
+        || api.errorCode == QStringLiteral("TOKEN_INVALID")) {
+        emitLog(QStringLiteral("认证失效: %1").arg(authErrorMessage(api)));
+        clearAuthToken();
+        markDisconnected(QStringLiteral("登录已失效"));
+        emit authenticationRequired();
+    }
+}
+
+void GantryClient::setAuthToken(const QString &token) {
+    m_authToken = token.trimmed();
+}
+
+void GantryClient::clearAuthToken() {
+    m_authToken.clear();
+}
+
+void GantryClient::setAuthProfile(const QString &username, const QString &role) {
+    m_authUsername = username;
+    m_authRole = role;
+}
+
 // ============================================================================
 // HTTP 辅助
 // ============================================================================
@@ -34,10 +63,12 @@ void GantryClient::get(const QString &path, const QString &logTag,
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setTransferTimeout(timeoutMs);
+    applyAuthHeader(req);
 
     QNetworkReply *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler]() {
         const QByteArray body = reply->readAll();
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         ApiResponse api = parseApiResponse(body);
         if (reply->error() != QNetworkReply::NoError && body.isEmpty()) {
             const QString err = QString("%1: %2").arg(logTag, reply->errorString());
@@ -49,6 +80,13 @@ void GantryClient::get(const QString &path, const QString &logTag,
                     markDisconnected(QStringLiteral("连续 %1 次通信失败，判定断线")
                                      .arg(m_consecutivePollFailures));
             }
+            reply->deleteLater();
+            return;
+        }
+        if (!api.ok && (httpStatus == 401
+                        || api.errorCode == QStringLiteral("UNAUTHORIZED")
+                        || api.errorCode == QStringLiteral("TOKEN_INVALID"))) {
+            handleAuthFailure(api, httpStatus);
             reply->deleteLater();
             return;
         }
@@ -82,6 +120,7 @@ void GantryClient::post(const QString &path, const QJsonObject &body,
     QUrl url(m_baseUrl + path);
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    applyAuthHeader(req);
     const QString rel = apiRelativePath(path);
     const bool isMotion = rel.startsWith(QStringLiteral("motion/"))
         || rel.startsWith(QStringLiteral("workflow/"));
@@ -92,11 +131,21 @@ void GantryClient::post(const QString &path, const QJsonObject &body,
     QNetworkReply *reply = m_nam->post(req, payload);
     connect(reply, &QNetworkReply::finished, this, [this, reply, logTag, handler, rel, isMotion]() {
         const QByteArray respBody = reply->readAll();
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         ApiResponse api = parseApiResponse(respBody);
         if (reply->error() != QNetworkReply::NoError && respBody.isEmpty()) {
             const QString err = QString("%1: %2").arg(logTag, reply->errorString());
             emitLog(err);
             emit communicationError(err);
+            if (isMotion && m_motionInProgress)
+                setMotionInProgress(false);
+            reply->deleteLater();
+            return;
+        }
+        if (!api.ok && (httpStatus == 401
+                        || api.errorCode == QStringLiteral("UNAUTHORIZED")
+                        || api.errorCode == QStringLiteral("TOKEN_INVALID"))) {
+            handleAuthFailure(api, httpStatus);
             if (isMotion && m_motionInProgress)
                 setMotionInProgress(false);
             reply->deleteLater();
@@ -158,6 +207,11 @@ void GantryClient::finishConnectProbe(const ApiResponse &statusApi) {
 
 void GantryClient::connectToBackend(const QString &host, quint16 port) {
     disconnect();
+    if (m_authToken.isEmpty()) {
+        emitLog(QStringLiteral("未登录，无法连接后端"));
+        emit authenticationRequired();
+        return;
+    }
     m_host = host.trimmed();
     m_port = port;
     m_baseUrl = QString("http://%1:%2").arg(m_host).arg(m_port);

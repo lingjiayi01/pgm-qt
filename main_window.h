@@ -21,11 +21,15 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+    void applyAuthSession(const AuthSession &session);
+    bool reloginRequested() const { return m_reloginRequested; }
+
 private slots:
     void onStatusUpdated(const GantryStatus &status);
     void onCommandResponse(const TcsResponse &resp);
     void onLogMessage(const QString &msg);
     void onConnectionError(const QString &err);
+    void onAuthenticationRequired();
     void connectToBackend();
     void disconnectFromBackend();
     void setAutoMode()   { m_client.setAutoMode(); }
@@ -97,10 +101,12 @@ private:
     GantryClient m_client;
     QTimer m_pollTimer;
     QTimer m_clockTimer;
+    bool m_reloginRequested = false;
 
     QRadioButton *m_localRadio = nullptr;
     QRadioButton *m_remoteRadio = nullptr;
     QLabel *m_timeLabel = nullptr;
+    QLabel *m_userLabel = nullptr;
 
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_portEdit = nullptr;

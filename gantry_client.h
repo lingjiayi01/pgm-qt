@@ -45,6 +45,13 @@ public:
     void runPointTableVerify();
     bool isMotionInProgress() const { return m_motionInProgress; }
 
+    void setAuthToken(const QString &token);
+    void clearAuthToken();
+    QString authToken() const { return m_authToken; }
+    QString authUsername() const { return m_authUsername; }
+    QString authRole() const { return m_authRole; }
+    void setAuthProfile(const QString &username, const QString &role);
+
 signals:
     void connected();
     void disconnected();
@@ -54,6 +61,7 @@ signals:
     void communicationError(const QString &error);
     void logMessage(const QString &msg);
     void motionFinished();
+    void authenticationRequired();
 
 private:
     using ResponseHandler = std::function<void(const ApiResponse &)>;
@@ -69,6 +77,8 @@ private:
     void finishConnectProbe(const ApiResponse &statusApi);
     QString apiRelativePath(const QString &fullPath) const;
     void emitCommandResponse(const ApiResponse &api, const QString &relativePath);
+    void applyAuthHeader(QNetworkRequest &req) const;
+    void handleAuthFailure(const ApiResponse &api, int httpStatus);
 
     QNetworkAccessManager *m_nam = nullptr;
     QString m_baseUrl;
@@ -78,5 +88,8 @@ private:
     bool m_plcConnected = false;
     int m_consecutivePollFailures = 0;
     bool m_motionInProgress = false;
+    QString m_authToken;
+    QString m_authUsername;
+    QString m_authRole;
     void setMotionInProgress(bool busy);
 };

@@ -1,6 +1,6 @@
 #include "main_window.h"
+#include "login_dialog.h"
 #include <QStringConverter>
-#include <QInputDialog>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QFile>
@@ -155,6 +155,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onLogMessage);
     connect(&m_client, &GantryClient::communicationError,
             this, &MainWindow::onConnectionError);
+    connect(&m_client, &GantryClient::authenticationRequired,
+            this, &MainWindow::onAuthenticationRequired);
     connect(&m_pollTimer, &QTimer::timeout, this, [this]() {
         m_client.pollStatus();
         const int ms = pollIntervalMs();
@@ -249,6 +251,10 @@ QWidget *MainWindow::buildTopBar() {
     h->addWidget(m_motionInhibitBar);
 
     h->addStretch();
+
+    m_userLabel = new QLabel;
+    m_userLabel->setStyleSheet(QStringLiteral("color:#90a8c8; font-size:9pt;"));
+    h->addWidget(m_userLabel);
 
     m_timeLabel = new QLabel;
     m_timeLabel->setStyleSheet("color:#90a0b8; font-size:10pt;");
@@ -614,15 +620,29 @@ QWidget *MainWindow::buildRightPanel() {
     brakeG->addWidget(m_btnBrakesClose, 0, 0);
     brakeG->addWidget(m_btnBrakesOpen, 0, 1);
     brakeG->addWidget(m_btnEstopRecover, 1, 0, 1, 2);
+    auto *brakeForm = new QFormLayout;
+    brakeForm->setSpacing(kCompactSpacing);
+    brakeForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     for (int i = 0; i < 6; ++i) {
-        m_ledBrakeIndividual[i] = makeLed(QStringLiteral("制动%1").arg(i + 1));
+        m_ledBrakeIndividual[i] = makeLed(QStringLiteral("—"));
         auto *cell = new QWidget;
         auto *hl = new QHBoxLayout(cell);
         hl->setContentsMargins(0, 0, 0, 0);
         hl->addWidget(m_ledBrakeIndividual[i].dot);
         hl->addWidget(m_ledBrakeIndividual[i].text);
-        brakeG->addWidget(cell, 2 + i / 2, i % 2);
+        hl->addStretch();
+        const QString name = QStringLiteral("制动%1").arg(i + 1);
+        const QString tip = QStringLiteral("000%1 %2打开检测")
+                                .arg(11 + i, 2, 10, QChar('0'))
+                                .arg(name);
+        brakeForm->addRow(name, cell);
+        cell->setToolTip(tip);
+        if (m_ledBrakeIndividual[i].dot)
+            m_ledBrakeIndividual[i].dot->setToolTip(tip);
+        if (m_ledBrakeIndividual[i].text)
+            m_ledBrakeIndividual[i].text->setToolTip(tip);
     }
+    brakeG->addLayout(brakeForm, 2, 0, 1, 2);
     brakeV->addLayout(brakeG);
     topRow->addWidget(brakeBox, 1);
 
@@ -931,7 +951,8 @@ void MainWindow::updateStatusLeds(const GantryStatus &s) {
         const bool open = i < (int)s.brakesOpen.size() && s.brakesOpen[i];
         setLedColor(m_ledBrakeIndividual[i], !open);
         if (m_ledBrakeIndividual[i].text)
-            m_ledBrakeIndividual[i].text->setText(open ? QStringLiteral("打开") : QStringLiteral("关闭"));
+            m_ledBrakeIndividual[i].text->setText(
+                open ? QStringLiteral("打开") : QStringLiteral("关闭"));
     }
 
     auto [bp, bpr] = s.beamPermit();
@@ -1000,8 +1021,11 @@ void MainWindow::resetAllLeds() {
     setLedColor(m_ledAtNegLimit, false);
     setLedColor(m_ledMotionInhibit, false);
     setLedColor(m_ledBeamPermit, false);
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 6; ++i) {
         setLedColor(m_ledBrakeIndividual[i], false);
+        if (m_ledBrakeIndividual[i].text)
+            m_ledBrakeIndividual[i].text->setText(QStringLiteral("—"));
+    }
     if (m_labelMotorStatus)
         m_labelMotorStatus->setText(QStringLiteral("电机：停止"));
     if (m_gauge) {
@@ -1186,6 +1210,27 @@ void MainWindow::showApiErrorPopup(const TcsResponse &r) {
 void MainWindow::onLogMessage(const QString &msg) { appendLogRow(msg); }
 
 void MainWindow::onConnectionError(const QString &err) { onLogMessage("通信错误: " + err); }
+
+void MainWindow::applyAuthSession(const AuthSession &session) {
+    m_client.setAuthToken(session.token);
+    m_client.setAuthProfile(session.username, session.role);
+    if (m_userLabel) {
+        m_userLabel->setText(
+            QStringLiteral("%1 (%2)").arg(session.username, session.role));
+        m_userLabel->setToolTip(QStringLiteral("当前登录用户"));
+    }
+}
+
+void MainWindow::onAuthenticationRequired() {
+    if (m_reloginRequested)
+        return;
+    m_reloginRequested = true;
+    m_pollTimer.stop();
+    m_client.disconnect();
+    QMessageBox::warning(this, QStringLiteral("登录失效"),
+                         QStringLiteral("登录已失效，请重新登录。"));
+    QApplication::exit(kReloginExitCode);
+}
 
 void MainWindow::updateControlsForConnectionMode() {
     const bool connected = m_client.isConnected();

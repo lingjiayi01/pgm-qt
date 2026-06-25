@@ -426,6 +426,27 @@ struct ApiResponse {
     QString timestamp;
 };
 
+struct AuthSession {
+    QString token;
+    QString username;
+    QString role;
+
+    bool isValid() const { return !token.isEmpty(); }
+};
+
+inline QString authErrorMessage(const ApiResponse &api) {
+    if (api.errorCode == QStringLiteral("USER_NOT_FOUND"))
+        return QStringLiteral("账号不存在");
+    if (api.errorCode == QStringLiteral("INVALID_PASSWORD"))
+        return QStringLiteral("密码错误");
+    if (api.errorCode == QStringLiteral("ACCOUNT_LOCKED"))
+        return api.error.isEmpty() ? QStringLiteral("账号已锁定") : api.error;
+    if (api.errorCode == QStringLiteral("TOKEN_INVALID")
+        || api.errorCode == QStringLiteral("UNAUTHORIZED"))
+        return QStringLiteral("登录已失效，请重新登录");
+    return api.error.isEmpty() ? QStringLiteral("登录失败") : api.error;
+}
+
 inline ApiResponse parseApiResponse(const QByteArray &body) {
     ApiResponse r;
     QJsonParseError err;

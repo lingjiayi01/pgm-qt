@@ -19,6 +19,8 @@ set(SOURCES
     main.cpp
     gantry_client.cpp
     main_window.cpp
+    login_dialog.cpp
+    credential_store.cpp
 )
 
 set(HEADERS
@@ -26,6 +28,8 @@ set(HEADERS
     gantry_client.h
     gauge_widget.h
     main_window.h
+    login_dialog.h
+    credential_store.h
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
@@ -45,4 +49,5 @@ if(WIN32)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         WIN32_EXECUTABLE $<CONFIG:Release>
     )
+    target_link_libraries(${PROJECT_NAME} PRIVATE crypt32)
 endif()
